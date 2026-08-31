@@ -64,17 +64,56 @@
     <Grid>
         <Grid.RowDefinitions>
             <RowDefinition Height="Auto" />
+            <RowDefinition Height="Auto" />
             <RowDefinition Height="*" />
             <RowDefinition Height="Auto" />
         </Grid.RowDefinitions>
 
+        <!-- Обновление самого лаунчера. Самой верхней строкой и заметным
+             цветом: это единственное, что друг не может узнать иначе. -->
+        <Border Grid.Row="0" Background="#FF1E3A24" BorderBrush="#FF2F6B3C"
+                BorderThickness="0,0,0,1" Padding="14,10"
+                Visibility="{Binding ShowLauncherBar, Converter={StaticResource BoolToVis}}">
+            <Grid>
+                <Grid.ColumnDefinitions>
+                    <ColumnDefinition Width="*" />
+                    <ColumnDefinition Width="Auto" />
+                </Grid.ColumnDefinitions>
+
+                <StackPanel VerticalAlignment="Center">
+                    <TextBlock Text="{Binding LauncherHeadline}" Foreground="#FFB9E7C2"
+                               FontWeight="SemiBold" />
+
+                    <TextBlock Text="{Binding LauncherProgressText}" Foreground="#FF8FC79B"
+                               FontSize="11" Margin="0,4,0,0"
+                               Visibility="{Binding LauncherBusy, Converter={StaticResource BoolToVis}}" />
+
+                    <!-- Mode=OneWay обязателен: ProgressBar.Value связывается
+                         TwoWay по умолчанию, а свойство только для чтения. -->
+                    <ProgressBar Height="5" Maximum="100" Margin="0,6,0,0"
+                                 Value="{Binding LauncherProgressValue, Mode=OneWay}"
+                                 IsIndeterminate="{Binding LauncherProgressIndeterminate, Mode=OneWay}"
+                                 Background="#FF17301D" Foreground="#FF4FA860" BorderThickness="0"
+                                 Visibility="{Binding LauncherBusy, Converter={StaticResource BoolToVis}}" />
+
+                    <TextBlock Text="{Binding LauncherError}" Foreground="#FFE58A6A" Margin="0,4,0,0"
+                               Visibility="{Binding HasLauncherError, Converter={StaticResource BoolToVis}}" />
+                </StackPanel>
+
+                <Button Grid.Column="1" Content="Обновить и перезапустить" Margin="14,0,0,0"
+                        Style="{StaticResource Accent}"
+                        Command="{Binding UpdateLauncherCommand}"
+                        Visibility="{Binding HasLauncherUpdate, Converter={StaticResource BoolToVis}}" />
+            </Grid>
+        </Border>
+
         <!-- Полоска сообщений: каталог из копии, лимит исчерпан и т.п. -->
-        <Border Grid.Row="0" Background="#FF3A2F1E" Padding="14,9"
+        <Border Grid.Row="1" Background="#FF3A2F1E" Padding="14,9"
                 Visibility="{Binding HasNotice, Converter={StaticResource BoolToVis}}">
             <TextBlock Text="{Binding Notice}" Foreground="#FFE7C88A" />
         </Border>
 
-        <Grid Grid.Row="1">
+        <Grid Grid.Row="2">
             <Grid.ColumnDefinitions>
                 <ColumnDefinition Width="260" />
                 <ColumnDefinition Width="*" />
@@ -182,10 +221,11 @@
         </Grid>
 
         <!-- подвал -->
-        <Border Grid.Row="2" Background="#FF17181B" BorderBrush="#FF2A2C31" BorderThickness="0,1,0,0" Padding="14,8">
+        <Border Grid.Row="3" Background="#FF17181B" BorderBrush="#FF2A2C31" BorderThickness="0,1,0,0" Padding="14,8">
             <Grid>
                 <Grid.ColumnDefinitions>
                     <ColumnDefinition Width="*" />
+                    <ColumnDefinition Width="Auto" />
                     <ColumnDefinition Width="Auto" />
                     <ColumnDefinition Width="Auto" />
                 </Grid.ColumnDefinitions>
@@ -194,10 +234,13 @@
                            VerticalAlignment="Center" TextTrimming="CharacterEllipsis"
                            ToolTip="Папка с играми" />
 
-                <TextBlock Grid.Column="1" Text="{Binding RateLimit}" Style="{StaticResource Dim}"
+                <TextBlock Grid.Column="1" Text="{Binding LauncherVersion}" Style="{StaticResource Dim}"
+                           FontSize="11" VerticalAlignment="Center" Margin="12,0,0,0" />
+
+                <TextBlock Grid.Column="2" Text="{Binding RateLimit}" Style="{StaticResource Dim}"
                            FontSize="11" VerticalAlignment="Center" Margin="12,0" />
 
-                <Button Grid.Column="2" Content="Обновить" Padding="12,5"
+                <Button Grid.Column="3" Content="Обновить" Padding="12,5"
                         Command="{Binding RefreshCommand}" />
             </Grid>
         </Border>

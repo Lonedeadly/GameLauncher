@@ -60,6 +60,8 @@ public static class SelfTest
             var releases = new ReleaseService(library);
             var lookups = await TestReleases(releases, catalog, library);
 
+            await TestSelfUpdate(library, releases, args);
+
             TestEmptyShowcase(library, catalog, lookups);
             await TestCatalogOffline(library, workDir);
 
@@ -469,6 +471,107 @@ public static class SelfTest
         Check(File.Exists(marker), "метка библиотеки на месте");
         Check(File.Exists(library.StatePath), "state.json на месте");
         Check(Directory.Exists(library.Root), "сама библиотека не тронута");
+    }
+
+    // ── обновление самого лаунчера ───────────────────────────────────────
+
+    private static async Task TestSelfUpdate(
+        LibraryService library, ReleaseService releases, string[] args)
+    {
+        Head("Обновление лаунчера");
+
+        Line($"своя версия    {AppVersion.Display}" +
+             (AppVersion.IsDevBuild ? " (сборка из исходников)" : ""));
+
+        // Сравнение версий таблицей: пересобирать лаунчер под каждый номер,
+        // чтобы проверить «новее или нет», было бы издевательством.
+        var cases = new (string Current, string Tag, bool Expected, string Why)[]
+        {
+            ("0.1.0", "v0.2.0",      true,  "следующая минорная новее"),
+            ("0.1.0", "v0.1.1",      true,  "следующая патч новее"),
+            ("0.1.0", "v1.0.0",      true,  "следующая мажорная новее"),
+            ("0.1.0", "v0.1.0",      false, "та же самая не новее"),
+            ("0.2.0", "v0.1.9",      false, "предыдущая не новее"),
+            ("0.1.0", "0.2.0",       true,  "тег без «v» тоже понимается"),
+            ("0.1.0", "v0.2.0-beta", true,  "суффикс не мешает сравнению"),
+            ("0.1.0", "dev",         false, "движущийся тег не версия"),
+            ("0.1.0", "",            false, "пустой тег не версия"),
+        };
+
+        foreach (var (current, tag, expected, why) in cases)
+            Check(SelfUpdateService.IsNewer(current, tag) == expected,
+                $"{current} против «{tag}» → {(expected ? "новее" : "не новее")}: {why}");
+
+        // Имена соседей: от них зависит, что мы удалим при уборке.
+        var sample = Path.Combine("C:", "игры", "GameLauncher.exe");
+        Check(SelfUpdateService.Sibling(sample, ".new")
+                  .EndsWith("GameLauncher.new.exe", StringComparison.Ordinal),
+            "имя временного файла собирается от текущего exe");
+        Check(SelfUpdateService.Sibling(Path.Combine("C:", "игры", "Мой лаунчер.exe"), ".old")
+                  .EndsWith("Мой лаунчер.old.exe", StringComparison.Ordinal),
+            "переименованный exe тоже обслуживается");
+
+        // Живой запрос к своему же репозиторию.
+        var service = new SelfUpdateService(library, releases);
+        var info = await service.CheckAsync();
+
+        Line($"состояние      {info.State}");
+        if (info.Message is not null) Line($"сообщение      {info.Message}");
+
+        if (AppVersion.IsDevBuild)
+        {
+            Check(info.State == SelfUpdateState.DevBuild,
+                "сборка из исходников не предлагает подменить себя релизной");
+            Check(info.Build is null, "и запроса на неё не тратит");
+        }
+        else
+        {
+            Check(info.State is SelfUpdateState.Available or SelfUpdateState.UpToDate,
+                $"релиз лаунчера найден, последний {info.Latest ?? "—"}");
+        }
+
+        // Отдельно — то, что видно и на dev-сборке: как выглядит наш релиз.
+        var lookup = await releases.GetAsync(SelfUpdateService.Repo);
+        var build = lookup.For(Channels.Stable);
+
+        if (build is null)
+        {
+            Fail("В своём репозитории не видно ни одного релиза.");
+            return;
+        }
+
+        Line($"последний      {build.Tag}, {build.AssetName}, {build.Size / 1048576.0:0.0} МБ");
+        Check(SelfUpdateService.TryParseTag(build.Tag) is not null,
+            $"тег «{build.Tag}» разбирается в номер версии");
+        Check(build.HasStrongFingerprint,
+            "у файла есть sha256 — скачанное будет с чем сверить");
+
+        if (args.Contains("--selfupdate")) await ApplySelfUpdate(service, build);
+    }
+
+    /// <summary>Настоящая подмена файла — только по явному «--selfupdate».
+    /// Процесс после неё завершается: заменять себя, продолжая работать,
+    /// Windows не даёт, в этом вся суть механизма.</summary>
+    private static async Task ApplySelfUpdate(SelfUpdateService service, Model.RemoteBuild build)
+    {
+        Head("Подмена файла лаунчера");
+        Line($"текущий exe    {Environment.ProcessPath}");
+        Line($"ставим         {build.Tag}");
+
+        try
+        {
+            var replacer = await service.ApplyAsync(build);
+            Check(!replacer.HasExited || replacer.ExitCode == 0, "процесс подмены запущен");
+            Line("");
+            Line("Выхожу, чтобы он мог переписать файл.");
+
+            _log?.Flush();
+            Environment.Exit(_failures == 0 ? 0 : 1);
+        }
+        catch (InstallException ex)
+        {
+            Fail($"Подмена не начата: {ex.Message}");
+        }
     }
 
     // ── вывод ────────────────────────────────────────────────────────────

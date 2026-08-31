@@ -105,6 +105,9 @@ public static class UiCheck
             {
                 report.AppendLine($"сообщение       {vm.Notice ?? "—"}");
                 if (vm.Notice?.StartsWith("Сбой") == true) Sink.Messages.Add($"СБОЙ ЗАГРУЗКИ: {vm.Notice}");
+                report.AppendLine($"версия          {vm.LauncherVersion}");
+                report.AppendLine($"полоса обновл.  {(vm.ShowLauncherBar ? "видна" : "скрыта")} | " +
+                                  $"кнопка {(vm.HasLauncherUpdate ? "есть" : "нет")} | {vm.LauncherHeadline}");
                 report.AppendLine($"игр в списке    {vm.Games.Count}");
                 report.AppendLine($"IsLoading       {vm.IsLoading}");
                 report.AppendLine($"IsEmpty         {vm.IsEmpty}");

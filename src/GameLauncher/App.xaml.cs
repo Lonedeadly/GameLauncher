@@ -11,6 +11,26 @@ public partial class App : Application
     {
         base.OnStartup(e);
 
+        // Вторая половина самообновления. Идёт самой первой: этот процесс —
+        // временный, окна у него нет и быть не должно.
+        if (SelfUpdateService.IsReplaceRun(e.Args))
+        {
+            var failure = SelfUpdateService.RunReplace(e.Args);
+            if (failure is not null)
+                MessageBox.Show(
+                    "Обновление не завершилось:" + Environment.NewLine + Environment.NewLine +
+                    failure + Environment.NewLine + Environment.NewLine +
+                    "Прежняя версия осталась на месте.",
+                    "GameLauncher", MessageBoxButton.OK, MessageBoxImage.Warning);
+
+            Environment.Exit(failure is null ? 0 : 1);
+            return;
+        }
+
+        // «.new» и «.old» от прошлого обновления: удалить их в тот момент
+        // было нельзя — один из двух ещё выполнялся.
+        SelfUpdateService.CleanLeftovers();
+
         // Прогон сервисов без окна: GameLauncher.exe --selftest <папка>
         if (e.Args.Contains("--selftest"))
         {
@@ -59,13 +79,17 @@ public partial class App : Application
             return;
         }
 
+        var releases = new ReleaseService(library);
+
         var viewModel = new MainViewModel(
             settings,
             library,
             new CatalogService(library),
-            new ReleaseService(library),
+            releases,
             new InstallService(library),
-            Confirm);
+            new SelfUpdateService(library, releases),
+            Confirm,
+            Shutdown);
 
         var window = new Views.MainWindow(viewModel);
         MainWindow = window;

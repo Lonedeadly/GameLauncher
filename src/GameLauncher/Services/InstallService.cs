@@ -1,7 +1,6 @@
 using System.Diagnostics;
 using System.IO.Compression;
 using System.Net.Http;
-using System.Security.Cryptography;
 using System.Text.Json;
 using GameLauncher.Infrastructure;
 using GameLauncher.Model;
@@ -97,42 +96,18 @@ public sealed class InstallService
     private static async Task<string> DownloadAsync(
         RemoteBuild remote, string zipPath, IProgress<InstallProgress>? progress, CancellationToken ct)
     {
-        using var response = await Http.Client.GetAsync(
-            remote.DownloadUrl, HttpCompletionOption.ResponseHeadersRead, ct);
-
-        if (!response.IsSuccessStatusCode)
-            throw new InstallException($"Не удалось скачать архив: {(int)response.StatusCode} {response.ReasonPhrase}.");
-
-        var total = response.Content.Headers.ContentLength ?? remote.Size;
-
-        await using var source = await response.Content.ReadAsStreamAsync(ct);
-        await using var target = new FileStream(zipPath, FileMode.Create, FileAccess.Write,
-            FileShare.None, 1 << 16, useAsync: true);
-
-        using var hash = IncrementalHash.CreateHash(HashAlgorithmName.SHA256);
-        var buffer = new byte[1 << 16];
-        long done = 0;
-        var lastReport = 0L;
-
-        while (true)
+        try
         {
-            var read = await source.ReadAsync(buffer, ct);
-            if (read == 0) break;
-
-            hash.AppendData(buffer, 0, read);
-            await target.WriteAsync(buffer.AsMemory(0, read), ct);
-            done += read;
-
-            // Не дёргаем интерфейс на каждый блок: примерно раз на 256 КБ.
-            if (done - lastReport >= 262144)
-            {
-                progress?.Report(new InstallProgress(InstallPhase.Downloading, done, total));
-                lastReport = done;
-            }
+            return await Downloader.ToFileAsync(
+                remote.DownloadUrl, zipPath, remote.Size,
+                (done, total) => progress?.Report(
+                    new InstallProgress(InstallPhase.Downloading, done, total)),
+                ct);
         }
-
-        progress?.Report(new InstallProgress(InstallPhase.Downloading, done, total));
-        return Convert.ToHexString(hash.GetHashAndReset()).ToLowerInvariant();
+        catch (HttpRequestException ex)
+        {
+            throw new InstallException($"Не удалось скачать архив: {ex.Message}.", ex);
+        }
     }
 
     private static void Verify(RemoteBuild remote, string zipPath, string actualSha,
