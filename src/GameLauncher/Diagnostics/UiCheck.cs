@@ -151,6 +151,14 @@ public static class UiCheck
         window.Show();
         window.UpdateLayout();
         Snapshot(window, Path.Combine(workDir, "first-run.png"));
+
+        // «Продолжить» не должна быть кнопкой по умолчанию. Окно всплывает
+        // неожиданно — например, сразу после перезапуска при обновлении, —
+        // и один случайный Enter принял бы непрочитанный путь. Проверено
+        // на живом окне: с IsDefault один Enter заводил папку и конфиг.
+        if (window.FindName("OkButton") is System.Windows.Controls.Button ok && ok.IsDefault)
+            Sink.Messages.Add("«Продолжить» снова помечена IsDefault: Enter примет путь без ведома человека.");
+
         window.Close();
     }
 }

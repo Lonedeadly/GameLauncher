@@ -54,8 +54,13 @@
 
         <StackPanel Orientation="Horizontal" HorizontalAlignment="Right" Margin="0,12,0,0">
             <Button Content="Отмена" Click="Cancel_Click" />
+            <!-- Намеренно БЕЗ IsDefault. Окно может всплыть неожиданно —
+                 например, сразу после перезапуска при обновлении, — и один
+                 случайный Enter принял бы путь, который человек не читал.
+                 Выбор места для игр подтверждается осознанно.
+                 За возвратом IsDefault следит проверка интерфейса. -->
             <Button x:Name="OkButton" Margin="8,0,0,0" Content="Продолжить"
-                    IsDefault="True" Click="Ok_Click"
+                    Click="Ok_Click"
                     Background="#FF2F6FEB" BorderBrush="#FF2F6FEB" />
         </StackPanel>
 

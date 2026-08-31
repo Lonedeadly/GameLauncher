@@ -229,6 +229,13 @@ public static class SelfTest
         Line($"остаток лимита GitHub: {releases.RateLimitRemaining?.ToString() ?? "неизвестно"}" +
              (releases.RateLimitReset is { } r ? $", сброс в {r.ToLocalTime():HH:mm}" : ""));
 
+        // Ноль в остатке — это не поломка лаунчера, а исчерпанный анонимный
+        // лимит GitHub: 60 запросов в час на адрес. Сказать об этом надо
+        // громко: иначе прогон выглядит как внезапный отказ всего сразу.
+        if (releases.RateLimitRemaining == 0)
+            Line("ВНИМАНИЕ: лимит исчерпан. Всё, что ниже опирается на сеть, " +
+                 "провалится не из-за кода. Дождитесь сброса и повторите.");
+
         // Второй заход обязан прийти из кэша и не потратить ни одного запроса.
         var before = releases.RateLimitRemaining;
         foreach (var game in catalog.Games) await releases.GetAsync(game.Repo);
