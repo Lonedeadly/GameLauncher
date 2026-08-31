@@ -10,6 +10,11 @@
     <AssemblyName>GameLauncher</AssemblyName>
     <RootNamespace>GameLauncher</RootNamespace>
     <ApplicationManifest>app.manifest</ApplicationManifest>
+
+    <!-- Заглушка для локальных сборок. Релизный workflow передаёт настоящую
+         версию из тега: -p:Version=0.1.0. Ноли — честный признак «собрано
+         руками», а не выдуманный номер. -->
+    <Version>0.0.0</Version>
   </PropertyGroup>
 
   <!-- Один файл, без рантайма у пользователя. Сжатие обязательно:

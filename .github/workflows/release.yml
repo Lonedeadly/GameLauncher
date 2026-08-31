@@ -17,8 +17,14 @@ jobs:
         with:
           dotnet-version: '10.0.x'
 
+      # Версия берётся из тега, а не хранится в репозитории: иначе она
+      # рано или поздно разойдётся с тем, что написано на релизе.
       - name: Publish
-        run: dotnet publish src/GameLauncher -c Release -o publish
+        shell: pwsh
+        run: |
+          $version = $env:GITHUB_REF_NAME -replace '^v', ''
+          "Версия сборки: $version"
+          dotnet publish src/GameLauncher -c Release -o publish -p:Version=$version
 
       # Имя ассета стабильное, без версии: так самообновление лаунчера
       # сможет искать его так же, как игры ищут свой zip.
