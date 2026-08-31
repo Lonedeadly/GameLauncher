@@ -1,3 +1,4 @@
+using System.Net;
 using System.Net.Http;
 using System.Text.Json;
 using GameLauncher.Infrastructure;
@@ -29,12 +30,19 @@ public sealed class CatalogService
 {
     public const int SupportedSchema = 1;
 
-    private const string Url =
+    public const string DefaultUrl =
         "https://raw.githubusercontent.com/Lonedeadly/GameLauncher/main/catalog.json";
 
     private readonly LibraryService _library;
+    private readonly string _url;
 
-    public CatalogService(LibraryService library) => _library = library;
+    /// <param name="url">Подменяется только самопроверкой, чтобы можно было
+    /// прогнать ветку «сети нет» не отключая сеть.</param>
+    public CatalogService(LibraryService library, string? url = null)
+    {
+        _library = library;
+        _url = url ?? DefaultUrl;
+    }
 
     private string CachePath => Path.Combine(_library.CacheDir, "catalog.json");
 
@@ -45,7 +53,7 @@ public sealed class CatalogService
             using var deadline = Http.Deadline(TimeSpan.FromSeconds(20), ct);
 
             // no-cache просит CDN отдать свежее, насколько он может.
-            using var request = new HttpRequestMessage(HttpMethod.Get, Url);
+            using var request = new HttpRequestMessage(HttpMethod.Get, _url);
             request.Headers.CacheControl = new System.Net.Http.Headers.CacheControlHeaderValue { NoCache = true };
 
             using var response = await Http.Client.SendAsync(request, deadline.Token);
@@ -106,12 +114,26 @@ public sealed class CatalogService
               "Часть игр может не отображаться — обновите лаунчер."
             : null;
 
+    /// <summary>Причина отказа своими словами.
+    ///
+    /// Разделять «не достучались» и «достучались, а ответ плохой»
+    /// обязательно: 404 из-за опечатки в пути и оборванная сеть лечатся
+    /// совершенно по-разному, а сообщение «нет связи» увело бы не туда.</summary>
     private static string Describe(Exception ex) => ex switch
     {
-        TaskCanceledException => "Список игр не загрузился: истекло время ожидания.",
-        HttpRequestException => "Список игр не загрузился: нет связи с GitHub.",
-        JsonException => "Список игр не загрузился: файл каталога повреждён.",
-        _ => "Список игр не загрузился.",
+        TaskCanceledException => "GitHub не ответил вовремя.",
+
+        HttpRequestException { StatusCode: HttpStatusCode.NotFound } =>
+            "Файл каталога не найден на GitHub.",
+
+        HttpRequestException { StatusCode: { } code } =>
+            $"GitHub ответил ошибкой {(int)code}.",
+
+        HttpRequestException => "Нет связи с GitHub.",
+
+        JsonException => "Файл каталога повреждён.",
+
+        _ => "Список игр загрузить не удалось.",
     };
 
     private void TrySaveCache(string json)

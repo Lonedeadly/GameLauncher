@@ -60,7 +60,7 @@ public sealed class ReleaseService
         try
         {
             var builds = await FetchAsync(repo, ct);
-            var lookup = new CachedLookup(DateTimeOffset.UtcNow, builds);
+            var lookup = new CachedLookup { FetchedAt = DateTimeOffset.UtcNow, ByChannel = builds };
             WriteCache(repo, lookup);
             return new ReleaseLookup(lookup.ByChannel, ReleaseSource.Network, lookup.FetchedAt, null);
         }
@@ -156,18 +156,26 @@ public sealed class ReleaseService
         return result;
     }
 
-    /// <summary>По контракту в релизе ровно один asset вида
-    /// «Игра-канал-win64.zip». Проверяем это, а не берём вслепую первый:
-    /// чужой файл, случайно попавший в релиз, не должен уехать другу.</summary>
+    /// <summary>По контракту в релизе ровно один asset — его и берём.
+    ///
+    /// Собирать имя по шаблону нельзя: в стабильном релизе оно содержит тег
+    /// (Strelalka-v0.1.0-win64.zip), в dev — слово dev. Любая маска рано или
+    /// поздно разойдётся с тем, что публикует сборка.
+    ///
+    /// Если ассетов вдруг несколько, предпочитаем zip — но это подстраховка
+    /// на случай нарушенного контракта, а не рабочий путь.</summary>
     private static GhAsset? PickAsset(GhRelease release)
     {
-        var assets = release.Assets ?? [];
+        var usable = (release.Assets ?? [])
+            .Where(a => a.State is null or "uploaded"
+                        && !string.IsNullOrEmpty(a.BrowserDownloadUrl)
+                        && a.Name is { Length: > 0 })
+            .ToList();
 
-        return assets.FirstOrDefault(a =>
-            a.State is null or "uploaded"
-            && !string.IsNullOrEmpty(a.BrowserDownloadUrl)
-            && a.Name is { Length: > 0 }
-            && a.Name.EndsWith("-win64.zip", StringComparison.OrdinalIgnoreCase));
+        if (usable.Count <= 1) return usable.FirstOrDefault();
+
+        return usable.FirstOrDefault(a => a.Name!.EndsWith(".zip", StringComparison.OrdinalIgnoreCase))
+               ?? usable[0];
     }
 
     private static string? StripDigest(string? digest) =>
@@ -197,9 +205,14 @@ public sealed class ReleaseService
 
     // ── кэш ──────────────────────────────────────────────────────────────
 
-    private sealed record CachedLookup(
-        DateTimeOffset FetchedAt,
-        Dictionary<string, RemoteBuild> ByChannel);
+    /// <summary>Форма кэша на диске — то, что переживает перезапуск.
+    /// Обычный класс с сеттерами, чтобы формат можно было расширять, не
+    /// ломая чтение старых файлов.</summary>
+    public sealed class CachedLookup
+    {
+        public DateTimeOffset FetchedAt { get; set; }
+        public Dictionary<string, RemoteBuild> ByChannel { get; set; } = new(StringComparer.OrdinalIgnoreCase);
+    }
 
     private string CachePath(string repo) =>
         Path.Combine(_library.CacheDir, "releases", repo.Replace('/', '_') + ".json");
@@ -219,8 +232,11 @@ public sealed class ReleaseService
             _memory[repo] = cached;
             return cached;
         }
-        catch (Exception ex) when (ex is IOException or JsonException)
+        catch (Exception)
         {
+            // Ловим всё намеренно: кэш — вспомогательный файл, его может
+            // испортить что угодно, а цена промаха — один лишний запрос
+            // к сети. Ронять из-за него запуск нельзя.
             return null;
         }
     }
@@ -232,7 +248,7 @@ public sealed class ReleaseService
         {
             AtomicFile.WriteAllText(CachePath(repo), JsonSerializer.Serialize(lookup, Json.Local));
         }
-        catch (Exception ex) when (ex is IOException or UnauthorizedAccessException)
+        catch (Exception)
         {
             // Кэш на диск не лёг — в памяти он всё равно есть.
         }

@@ -1,6 +1,13 @@
+using System.Windows;
+using GameLauncher.ViewModels;
+
 namespace GameLauncher.Views;
 
-public partial class MainWindow : System.Windows.Window
+public partial class MainWindow : Window
 {
-    public MainWindow() => InitializeComponent();
+    public MainWindow(MainViewModel viewModel)
+    {
+        InitializeComponent();
+        DataContext = viewModel;
+    }
 }

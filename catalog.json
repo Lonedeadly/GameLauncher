@@ -6,16 +6,16 @@
       "name": "Стрелялка",
       "repo": "Lonedeadly/Strelalka-Releases",
       "exe": "Strelalka.exe",
-      "description": "Заглушка описания.",
+      "description": "Заглушка описания. Настоящего пока нет.",
       "defaultChannel": "dev",
       "image": null
     },
     {
-      "id": "voxelengine",
+      "id": "voxel",
       "name": "VoxelEngine",
       "repo": "Lonedeadly/VoxelEngine-Releases",
-      "exe": "VoxelEngine.exe",
-      "description": "Заглушка описания.",
+      "exe": "VoxelGame.exe",
+      "description": "Заглушка описания. Настоящего пока нет.",
       "defaultChannel": "dev",
       "image": null
     }

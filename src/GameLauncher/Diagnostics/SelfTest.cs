@@ -14,11 +14,14 @@ public static class SelfTest
 {
     private static StreamWriter? _log;
     private static int _failures;
+    private static bool _keepInstalled;
 
     public static async Task<int> RunAsync(string[] args)
     {
         var workDir = args.SkipWhile(a => a != "--selftest").Skip(1).FirstOrDefault()
                       ?? Path.Combine(Path.GetTempPath(), "GameLauncher-selftest");
+
+        _keepInstalled = args.Contains("--keep");
 
         Directory.CreateDirectory(workDir);
 
@@ -55,7 +58,10 @@ public static class SelfTest
             }
 
             var releases = new ReleaseService(library);
-            var lookups = await TestReleases(releases, catalog);
+            var lookups = await TestReleases(releases, catalog, library);
+
+            TestEmptyShowcase(library, catalog, lookups);
+            await TestCatalogOffline(library, workDir);
 
             await TestInstallCycle(library, releases, catalog, lookups);
 
@@ -181,9 +187,12 @@ public static class SelfTest
 
     // ── 4. релизы ────────────────────────────────────────────────────────
 
+    private static LibraryService? _libraryForCacheProbe;
+
     private static async Task<Dictionary<string, ReleaseLookup>> TestReleases(
-        ReleaseService releases, Catalog catalog)
+        ReleaseService releases, Catalog catalog, LibraryService library)
     {
+        _libraryForCacheProbe = library;
         Head("Релизы");
         var lookups = new Dictionary<string, ReleaseLookup>(StringComparer.OrdinalIgnoreCase);
 
@@ -222,7 +231,81 @@ public static class SelfTest
         foreach (var game in catalog.Games) await releases.GetAsync(game.Repo);
         Check(releases.RateLimitRemaining == before, "повторный опрос обслужен кэшем, лимит не потрачен");
 
+        // А это уже кэш С ДИСКА: новый экземпляр сервиса ничего не помнит,
+        // как при следующем запуске лаунчера. Путь через файл иначе вообще
+        // не проверялся бы — первый прогон всегда идёт в сеть.
+        var fresh = new ReleaseService(_libraryForCacheProbe!);
+        var repo = catalog.Games[0].Repo;
+        var fromDisk = await fresh.GetAsync(repo);
+        Check(fromDisk.Source == ReleaseSource.Cache, $"кэш прочитан с диска: {fromDisk.Source}");
+        Check(fresh.RateLimitRemaining is null, "запроса к сети при этом не было");
+        Check(fromDisk.ByChannel.Count == lookups[catalog.Games[0].Id].ByChannel.Count,
+            "с диска поднялось столько же каналов, сколько было в сети");
+
         return lookups;
+    }
+
+    // ── 4б. пустая витрина ───────────────────────────────────────────────
+
+    /// <summary>Игра, у которой релизов ещё нет, обязана быть в списке —
+    /// с внятным состоянием и без кнопки «Установить».</summary>
+    private static void TestEmptyShowcase(
+        LibraryService library, Catalog catalog, Dictionary<string, ReleaseLookup> lookups)
+    {
+        Head("Витрина без релизов");
+
+        var empty = catalog.Games.FirstOrDefault(g =>
+            lookups.TryGetValue(g.Id, out var l) && l.Source == ReleaseSource.Network && l.ByChannel.Count == 0);
+
+        if (empty is null)
+        {
+            Fail("Не нашлось витрины без релизов — случай не проверен.");
+            return;
+        }
+
+        Line($"игра           {empty.Name} ({empty.Id}), витрина {empty.Repo}");
+        Check(catalog.Games.Any(g => g.Id == empty.Id), "игра осталась в списке, а не пропала");
+
+        var status = GameStatus.Compute(empty, Channels.Dev, library.GetInstalled(empty.Id), null);
+        Check(status.State == GameState.NotInstalled, $"состояние: {status.StateCaption}");
+        Check(!status.CanInstallOrUpdate, "кнопки «Установить» нет — ставить нечего");
+        Check(!status.CanPlay, "кнопки «Играть» нет");
+        Check(status.Note is { Length: > 0 }, $"объяснение показано: {status.Note}");
+        Check(status.AvailableVersion == "—", "доступная версия показана прочерком");
+    }
+
+    // ── 4в. каталог без сети ─────────────────────────────────────────────
+
+    /// <summary>Каталог недоступен — показываем последний известный список,
+    /// а не пустое окно.</summary>
+    private static async Task TestCatalogOffline(LibraryService library, string workDir)
+    {
+        Head("Каталог недоступен");
+
+        // Сохранённая копия появляется штатным путём: кладём её тем же
+        // сервисом, только источником служит локальный файл через file-URL
+        // мы пользоваться не можем, поэтому пишем кэш напрямую тем же JSON.
+        var localPath = FindRepoCatalog()!;
+        var cachePath = Path.Combine(library.CacheDir, "catalog.json");
+        Directory.CreateDirectory(library.CacheDir);
+        File.Copy(localPath, cachePath, overwrite: true);
+
+        // Заведомо несуществующий хост — сеть при этом отключать не нужно.
+        var offline = new CatalogService(library, "https://raw.githubusercontent.invalid/nope/catalog.json");
+        var result = await offline.LoadAsync();
+
+        Line($"источник       {result.Source}");
+        Line($"сообщение      {result.Warning}");
+        Check(result.Source == CatalogSource.Cache, "список взят из сохранённой копии");
+        Check(result.Catalog.Games.Count > 0, $"игр показано: {result.Catalog.Games.Count}");
+        Check(result.Warning is { Length: > 0 }, "пользователю сказано, что список несвежий");
+
+        // А если копии ещё нет — не падаем, просто честно пусто.
+        var bare = Path.Combine(workDir, "library-empty");
+        var lib2 = new LibraryService();
+        lib2.Open(bare);
+        var cold = await new CatalogService(lib2, "https://raw.githubusercontent.invalid/nope/catalog.json").LoadAsync();
+        Check(cold.Source == CatalogSource.None, "без копии и без сети — состояние None, а не исключение");
     }
 
     // ── 5. установка, обновление, удаление ───────────────────────────────
@@ -283,7 +366,15 @@ public static class SelfTest
         Check(!Directory.EnumerateFileSystemEntries(library.TempDir).Any(), "временная папка убрана за собой");
 
         await TestReplaceSemantics(library, install, pick, remote);
-        TestUninstall(library, install, pick, gameDir);
+        TestOfflinePlayability(library, pick);
+        TestActuallyRuns(install, pick, gameDir);
+
+        // --keep оставляет игру установленной: нужно, чтобы потом посмотреть
+        // на карточку в состоянии «установлена».
+        if (_keepInstalled)
+            Line("  [--keep] удаление пропущено, игра осталась на диске");
+        else
+            TestUninstall(library, install, pick, gameDir);
     }
 
     /// <summary>Главное свойство обновления: это замена папки, а не докачка
@@ -308,6 +399,61 @@ public static class SelfTest
         Check(!File.Exists(stray), "лишний файл исчез после переустановки");
         Check(!Directory.Exists(strayDir), "лишняя папка исчезла после переустановки");
         Check(File.Exists(Path.Combine(gameDir, pick.Exe)), $"{pick.Exe} при этом на месте");
+    }
+
+    /// <summary>«Играть» не имеет права зависеть от GitHub: моделируем полное
+    /// отсутствие сведений о релизах.</summary>
+    private static void TestOfflinePlayability(LibraryService library, CatalogEntry pick)
+    {
+        Head("Запуск без сети");
+
+        var status = GameStatus.Compute(pick, Channels.Dev, library.GetInstalled(pick.Id), remote: null);
+
+        Check(status.CanPlay, "установленную игру можно запустить без ответа от GitHub");
+        Check(status.PrimaryAction == "Играть", $"кнопка: «{status.PrimaryAction}»");
+        Check(status.State == GameState.InstalledUnknown, $"состояние: {status.StateCaption}");
+        Check(status.Note is { Length: > 0 }, $"честно сказано: {status.Note}");
+    }
+
+    /// <summary>Проверка всей цепочки целиком: скачали, распаковали — идёт ли.</summary>
+    private static void TestActuallyRuns(InstallService install, CatalogEntry pick, string gameDir)
+    {
+        Head("Игра запускается");
+
+        var files = Directory.GetFiles(gameDir, "*", SearchOption.AllDirectories);
+        Line($"файлов в папке {files.Length}");
+        Line($"объём          {files.Sum(f => new FileInfo(f).Length) / 1024.0 / 1024.0:0.00} МБ");
+
+        System.Diagnostics.Process? process = null;
+        try
+        {
+            process = install.Launch(pick);
+            Check(true, $"процесс стартовал, pid {process.Id}");
+
+            // Даём окну подняться и убеждаемся, что она не упала сразу же.
+            var died = process.WaitForExit(4000);
+            Check(!died, died
+                ? $"процесс завершился сам, код {process.ExitCode}"
+                : "через 4 секунды процесс жив — игра пошла");
+
+            Check(process.WorkingSetMemory() > 0, "процесс занял память");
+        }
+        catch (InstallException ex)
+        {
+            Fail($"запуск не удался: {ex.Message}");
+        }
+        finally
+        {
+            try
+            {
+                if (process is { HasExited: false }) { process.Kill(entireProcessTree: true); process.WaitForExit(3000); }
+            }
+            catch (Exception ex) when (ex is InvalidOperationException or System.ComponentModel.Win32Exception)
+            {
+                // Уже умер сам — не беда.
+            }
+            process?.Dispose();
+        }
     }
 
     private static void TestUninstall(
@@ -356,5 +502,15 @@ public static class SelfTest
         Line("");
         Line(_failures == 0 ? "ВСЁ ПРОШЛО" : $"ПРОВАЛОВ: {_failures}");
         return _failures == 0 ? 0 : 1;
+    }
+}
+
+internal static class ProcessExtensions
+{
+    /// <summary>Занятая процессом память; 0, если он уже успел завершиться.</summary>
+    public static long WorkingSetMemory(this System.Diagnostics.Process process)
+    {
+        try { process.Refresh(); return process.WorkingSet64; }
+        catch (InvalidOperationException) { return 0; }
     }
 }
