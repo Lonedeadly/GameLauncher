@@ -1,5 +1,6 @@
 using System.Windows;
 using GameLauncher.Diagnostics;
+using GameLauncher.Infrastructure;
 using GameLauncher.Services;
 using GameLauncher.ViewModels;
 
@@ -45,6 +46,19 @@ public partial class App : Application
         // Проверка привязок: поднять окно, послушать WPF, выйти.
         var uiCheck = e.Args.Contains("--uicheck");
         if (uiCheck) UiCheck.Attach();
+
+        // Вторая копия не нужна: обе писали бы в одну папку с играми и
+        // в один state.json, и запись об установке из одной затиралась бы
+        // другой. Разворачиваем уже открытое окно и уходим.
+        //
+        // Проверку привязок это не касается: она поднимает окно нарочно,
+        // и наткнуться на живой лаунчер значило бы её сорвать.
+        if (!uiCheck && !SingleInstance.TryAcquire())
+        {
+            SingleInstance.TryActivateExisting(TimeSpan.FromSeconds(3));
+            Shutdown();
+            return;
+        }
 
         // Пока идёт выбор папки, у приложения нет главного окна. Без этого
         // закрытие диалога первого запуска считалось бы закрытием последнего
