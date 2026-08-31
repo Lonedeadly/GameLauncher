@@ -24,4 +24,9 @@
     <DebugType>none</DebugType>
   </PropertyGroup>
 
+  <!-- WPF-шаблон не добавляет их сам, а лаунчер почти целиком про файлы. -->
+  <ItemGroup>
+    <Using Include="System.IO" />
+  </ItemGroup>
+
 </Project>
