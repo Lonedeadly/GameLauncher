@@ -1,0 +1,32 @@
+name: build
+
+on:
+  push:
+    branches: [main]
+  pull_request:
+  workflow_dispatch:
+
+jobs:
+  build:
+    runs-on: windows-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/setup-dotnet@v4
+        with:
+          dotnet-version: '10.0.x'
+
+      - name: Publish
+        run: dotnet publish src/GameLauncher -c Release -o publish
+
+      - name: Report size
+        shell: pwsh
+        run: |
+          $f = Get-Item publish/GameLauncher.exe
+          "GameLauncher.exe = {0:N1} MB" -f ($f.Length / 1MB)
+
+      - name: Validate catalog.json
+        shell: pwsh
+        run: |
+          Get-Content catalog.json -Raw -Encoding utf8 | ConvertFrom-Json | Out-Null
+          "catalog.json parses"

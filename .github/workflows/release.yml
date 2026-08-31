@@ -1,0 +1,33 @@
+name: release
+
+on:
+  push:
+    tags: ['v*']
+
+permissions:
+  contents: write   # GITHUB_TOKEN встроенный, отдельных секретов не нужно
+
+jobs:
+  release:
+    runs-on: windows-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/setup-dotnet@v4
+        with:
+          dotnet-version: '10.0.x'
+
+      - name: Publish
+        run: dotnet publish src/GameLauncher -c Release -o publish
+
+      # Имя ассета стабильное, без версии: так самообновление лаунчера
+      # сможет искать его так же, как игры ищут свой zip.
+      - name: Create release
+        shell: pwsh
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          gh release create "$env:GITHUB_REF_NAME" `
+            publish/GameLauncher.exe `
+            --title "$env:GITHUB_REF_NAME" `
+            --generate-notes
