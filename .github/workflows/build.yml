@@ -6,6 +6,11 @@ on:
   pull_request:
   workflow_dispatch:
 
+# Сборке хватает чтения. Права по умолчанию зависят от настроек репозитория
+# и могут оказаться шире нужного — задаём явно.
+permissions:
+  contents: read
+
 jobs:
   build:
     runs-on: windows-latest

@@ -34,8 +34,10 @@ public partial class App : Application
         var settings = new SettingsService();
         settings.Load();
 
+        // FirstOrDefault, а не индекс: «--uicheck» без пути — это опечатка
+        // в командной строке, а не повод падать с IndexOutOfRange.
         var libraryPath = uiCheck
-            ? e.Args[Array.IndexOf(e.Args, "--uicheck") + 1]
+            ? e.Args.SkipWhile(a => a != "--uicheck").Skip(1).FirstOrDefault()
             : ResolveLibraryPath(settings);
         if (libraryPath is null)
         {
