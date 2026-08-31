@@ -2,17 +2,39 @@ namespace GameLauncher.Model;
 
 /// <summary>build.json из корня распакованной игры. Лежит ВНУТРИ архива,
 /// поэтому доступен только после скачивания — сравнивать версии по нему
-/// нельзя, для этого есть <see cref="RemoteBuild.Fingerprint"/>.</summary>
+/// нельзя, для этого есть <see cref="RemoteBuild.Fingerprint"/>.
+///
+/// Полей channel и tag здесь намеренно нет. Канал у лаунчера свой — из
+/// каталога и настроек, — и подчиняться файлу внутри архива он не должен;
+/// тег той же сборки уже записан в state.json из данных релиза. Вдобавок
+/// у сборок до e20a5c4 channel врал своим именем: на стабильной там лежал
+/// тег («v0.1.0»), а не «stable». Читать его мы не начнём и теперь, когда
+/// он исправлен, — просто чтобы не заводить второй источник правды.</summary>
 public sealed class BuildInfo
 {
     public string Game { get; set; } = "";
-    public string Channel { get; set; } = "";
 
-    /// <summary>Полный sha коммита игры. Показывается пользователю как версия.</summary>
+    /// <summary>git describe: «v0.1.0» на стабильном релизе, что-то вроде
+    /// «v0.1.0-3-g7044994» на dev. Это и показывается пользователю.
+    ///
+    /// Формат не разбираем и ничего из него не вычисляем: сборка может
+    /// отдать и голый короткий хэш, если тегов у неё под рукой не оказалось.
+    ///
+    /// Поле новое. У сборок, выпущенных до него, его нет — тогда показываем
+    /// короткий commit, как раньше.</summary>
+    public string? Version { get; set; }
+
+    /// <summary>Полный sha коммита игры. Опознаёт сборку; лаунчер сравнивает
+    /// установленное с доступным по отпечатку ассета, потому что build.json
+    /// до скачивания недоступен.</summary>
     public string Commit { get; set; } = "";
 
     public DateTimeOffset? Built { get; set; }
 
     public string ShortCommit =>
         Commit.Length >= 7 ? Commit[..7] : Commit;
+
+    /// <summary>Что показать пользователю как версию.</summary>
+    public string Display =>
+        Version is { Length: > 0 } version ? version : ShortCommit;
 }

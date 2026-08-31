@@ -243,7 +243,12 @@ public sealed class InstallService
         var installed = new InstalledGame
         {
             Id = entry.Id,
+
+            // Канал берём свой, а не из build.json: там на стабильной сборке
+            // написан тег, и лаунчер решил бы, что канал сменился.
             Channel = remote.Channel,
+
+            Version = string.IsNullOrWhiteSpace(build.Version) ? null : build.Version,
             Commit = string.IsNullOrWhiteSpace(build.Commit) ? remote.CommitHint : build.Commit,
             Fingerprint = remote.Fingerprint,
             Tag = remote.Tag,

@@ -69,13 +69,35 @@ public sealed record GameStatus(
         _ => "установлена",
     };
 
-    public string InstalledVersion => Installed?.Commit is { Length: > 0 } c
-        ? Short(c)
-        : Installed is not null ? "неизвестно" : "—";
+    /// <summary>Показываем version из build.json — это git describe сборки.
+    /// У выпущенных раньше сборок поля нет, тогда короткий commit, как было.</summary>
+    public string InstalledVersion
+    {
+        get
+        {
+            if (Installed is null) return "—";
+            if (Installed.Version is { Length: > 0 } version) return version;
 
-    public string AvailableVersion => Remote?.CommitHint is { Length: > 0 } c
-        ? Short(c)
-        : Remote is not null ? Remote.Tag : "—";
+            return Installed.Commit is { Length: > 0 } commit ? Short(commit) : "неизвестно";
+        }
+    }
+
+    /// <summary>Что доступно. build.json лежит внутри архива, до установки
+    /// его нет, поэтому берём ближайшее по смыслу: у стабильного релиза это
+    /// тег, а в dev тег не двигается никогда — там осмысленнее коммит из
+    /// описания релиза.</summary>
+    public string AvailableVersion
+    {
+        get
+        {
+            if (Remote is null) return "—";
+
+            if (!string.Equals(Remote.Tag, Channels.Dev, StringComparison.OrdinalIgnoreCase))
+                return Remote.Tag;
+
+            return Remote.CommitHint is { Length: > 0 } commit ? Short(commit) : Remote.Tag;
+        }
+    }
 
     private static string Short(string commit) => commit.Length >= 7 ? commit[..7] : commit;
 }

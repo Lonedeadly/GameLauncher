@@ -62,6 +62,7 @@ public static class SelfTest
 
             await TestSelfUpdate(library, releases, args);
 
+            TestBuildInfoForms();
             TestEmptyShowcase(library, catalog, lookups);
             await TestCatalogOffline(library, workDir);
 
@@ -371,6 +372,8 @@ public static class SelfTest
         TestOfflinePlayability(library, pick);
         TestActuallyRuns(install, pick, gameDir);
 
+        await TestChannelSwitch(library, install, pick, lookups[pick.Id]);
+
         // --keep оставляет игру установленной: нужно, чтобы потом посмотреть
         // на карточку в состоянии «установлена».
         if (_keepInstalled)
@@ -456,6 +459,136 @@ public static class SelfTest
             }
             process?.Dispose();
         }
+    }
+
+    /// <summary>Разбор build.json во всех формах, которые встречаются в
+    /// живых релизах: поля добавлялись со временем, а уже выпущенные архивы
+    /// не переписываются и лежат как есть.</summary>
+    private static void TestBuildInfoForms()
+    {
+        Head("Формы build.json");
+
+        // Форма до появления version: только game, channel, commit, built.
+        const string oldest = """
+            {"game":"Strelalka","channel":"dev",
+             "commit":"496ad05f1c2a3b4d5e6f708192a3b4c5d6e7f809",
+             "built":"2026-08-31T08:58:30+00:00"}
+            """;
+
+        // Стабильный релиз v0.1.0: version уже есть, tag ещё нет,
+        // а channel содержит тег вместо названия канала.
+        const string stable = """
+            {"version":"v0.1.0","game":"Strelalka","channel":"v0.1.0",
+             "commit":"70449948e52fffc0efca8c3c9576ca0c2046e1b3",
+             "built":"2026-08-31T11:44:49+00:00"}
+            """;
+
+        // Сборки после e20a5c4: channel честный, добавился tag.
+        const string current = """
+            {"game":"Strelalka","channel":"dev","tag":"dev",
+             "version":"v0.1.0-1-ge20a5c4",
+             "commit":"e20a5c4b9f9577143acc884cdd2d9045043fb437",
+             "built":"2026-08-31T11:54:06+00:00"}
+            """;
+
+        var a = Parse(oldest);
+        Check(a is not null && a.Version is null, "старая форма разбирается, version нет");
+        Check(a?.Display == "496ad05", $"без version показан короткий commit: «{a?.Display}»");
+
+        var b = Parse(stable);
+        Check(b?.Version == "v0.1.0", $"v0.1.0: version = «{b?.Version}»");
+        Check(b?.Display == "v0.1.0", "показывается version, а не commit");
+
+        var c = Parse(current);
+        Check(c?.Version == "v0.1.0-1-ge20a5c4", $"новая форма: version = «{c?.Version}»");
+        Check(c?.Display == "v0.1.0-1-ge20a5c4", "git describe показывается целиком, без разбора");
+        Check(c?.Commit == "e20a5c4b9f9577143acc884cdd2d9045043fb437", "commit прочитан полностью");
+
+        // Лишние поля не должны ронять разбор: их будут добавлять и дальше.
+        Check(Parse("""{"commit":"abc1234","чего-то-новое":42}""")?.Display == "abc1234",
+            "незнакомые поля не мешают");
+
+        // И то же самое на уровне карточки: показ идёт от version, а без
+        // него — от коммита.
+        var entry = new CatalogEntry { Id = "x", Name = "X", Repo = "r/r", Exe = "x.exe" };
+        Check(Card(entry, version: null, commit: "496ad05f1c2a3b4d").InstalledVersion == "496ad05",
+            "в карточке без version показан короткий commit");
+        Check(Card(entry, version: "v0.1.0-1-ge20a5c4", commit: "e20a5c4b").InstalledVersion
+                  == "v0.1.0-1-ge20a5c4",
+            "в карточке с version показана она");
+
+        static BuildInfo? Parse(string json) =>
+            System.Text.Json.JsonSerializer.Deserialize<BuildInfo>(json, Json.Local);
+
+        static GameStatus Card(CatalogEntry entry, string? version, string commit) =>
+            GameStatus.Compute(entry, Channels.Dev,
+                new InstalledGame { Id = entry.Id, Channel = Channels.Dev, Version = version, Commit = commit },
+                null);
+    }
+
+    /// <summary>Переключение канала. Проверять его стало на чём: у витрины
+    /// появился стабильный релиз рядом с движущимся dev.</summary>
+    private static async Task TestChannelSwitch(
+        LibraryService library, InstallService install, CatalogEntry pick, ReleaseLookup lookup)
+    {
+        Head("Переключение канала");
+
+        var stable = lookup.For(Channels.Stable);
+        var dev = lookup.For(Channels.Dev);
+
+        if (stable is null)
+        {
+            Line("стабильных сборок нет — переключать не на что");
+            return;
+        }
+
+        Line($"stable         тег {stable.Tag}, {stable.AssetName}");
+        Line($"dev            тег {dev?.Tag ?? "—"}");
+
+        // Сейчас на диске dev. Смена канала обязана читаться как обновление,
+        // а не как «уже свежее»: это тоже замена содержимого папки.
+        var status = GameStatus.Compute(pick, Channels.Stable, library.GetInstalled(pick.Id), stable);
+        Check(status.State == GameState.UpdateAvailable,
+            $"выбран другой канал → {status.StateCaption} / кнопка «{status.PrimaryAction}»");
+        Check(status.Note is not null, $"причина названа: {status.Note}");
+
+        var installed = await install.InstallAsync(pick, stable);
+        Line($"поставлено     version «{installed.Version ?? "—"}», коммит {installed.Commit?[..7]}");
+
+        Check(installed.Channel == Channels.Stable, "в state.json записан канал лаунчера");
+        Check(installed.Version is { Length: > 0 }, "в build.json есть поле version");
+
+        status = GameStatus.Compute(pick, Channels.Stable, library.GetInstalled(pick.Id), stable);
+
+        // Главная проверка этого раздела. В build.json стабильной сборки
+        // channel равен тегу («v0.1.0»). Если бы лаунчер брал канал оттуда,
+        // он решил бы, что канал сменился, сразу после установки.
+        Check(status.State == GameState.UpToDate,
+            $"после установки stable: {status.StateCaption} — channel из build.json не подхвачен");
+
+        Check(status.InstalledVersion == installed.Version,
+            $"установленная версия показана как version: «{status.InstalledVersion}»");
+        Check(status.AvailableVersion == stable.Tag,
+            $"доступная версия показана тегом: «{status.AvailableVersion}»");
+        Check(File.Exists(Path.Combine(library.GameDir(pick.Id), pick.Exe)),
+            $"{pick.Exe} на месте после смены канала");
+
+        if (dev is null) return;
+
+        // И обратно, чтобы дальше всё шло от того же состояния, что и раньше.
+        var back = GameStatus.Compute(pick, Channels.Dev, library.GetInstalled(pick.Id), dev);
+        Check(back.State == GameState.UpdateAvailable,
+            $"возврат на dev → {back.StateCaption} / кнопка «{back.PrimaryAction}»");
+
+        var again = await install.InstallAsync(pick, dev);
+        Line($"вернули        version «{again.Version ?? "—"}»");
+
+        var final = GameStatus.Compute(pick, Channels.Dev, library.GetInstalled(pick.Id), dev);
+        Check(final.State == GameState.UpToDate, $"снова dev: {final.StateCaption}");
+        Check(final.InstalledVersion == again.Version,
+            $"показана version dev-сборки: «{final.InstalledVersion}»");
+        Check(final.AvailableVersion != Channels.Dev,
+            $"в dev показан не тег, а коммит: «{final.AvailableVersion}»");
     }
 
     private static void TestUninstall(

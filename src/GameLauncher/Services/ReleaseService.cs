@@ -132,9 +132,13 @@ public sealed class ReleaseService
 
         foreach (var release in usable)
         {
-            var channel = string.Equals(release.TagName, Channels.Dev, StringComparison.OrdinalIgnoreCase)
-                ? Channels.Dev
-                : Channels.Stable;
+            var isDev = string.Equals(release.TagName, Channels.Dev, StringComparison.OrdinalIgnoreCase);
+            var channel = isDev ? Channels.Dev : Channels.Stable;
+
+            // Стабильным считается только то, что GitHub не пометил
+            // предварительным — ровно так же поступает /releases/latest.
+            // Сам dev как раз помечен prerelease, но он отбирается по тегу.
+            if (!isDev && release.Prerelease) continue;
 
             if (result.ContainsKey(channel)) continue;   // уже взяли более свежий
 
