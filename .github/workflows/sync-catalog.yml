@@ -36,8 +36,9 @@ jobs:
           # второго пуша. Дешевле проверить здесь.
           jq -e '.games | length > 0' catalog.json > /dev/null
 
-          umask 077
+          # Права обычные: файл с 600 nginx не прочитает и ответит 403.
           printf '%s\n' "$PUBLISH_KEY" > publish_key
+          chmod 600 publish_key
           mkdir -p ~/.ssh
           printf '%s %s\n' "$HOST" "$HOSTKEY" >> ~/.ssh/known_hosts
 

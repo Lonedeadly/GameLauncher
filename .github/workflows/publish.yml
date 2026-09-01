@@ -66,12 +66,18 @@ jobs:
           build=$(find . -maxdepth 1 -type f)
           build=${build#./}
 
+          # Артефакт мог приехать с любыми правами, а раздаёт его nginx.
+          chmod 644 "$build"
+
           sha=$(sha256sum "$build" | cut -d' ' -f1)
           size=$(stat -c %s "$build")
           short=${GITHUB_SHA:0:7}
 
-          umask 077
+          # Права по умолчанию оставляем обычными: rsync переносит их как
+          # есть, а файл с правами 600 nginx прочитать не сможет и ответит
+          # 403 вместо раздачи. Закрываем отдельно только ключ.
           printf '%s\n' "$PUBLISH_KEY" > publish_key
+          chmod 600 publish_key
           mkdir -p ~/.ssh
           printf '%s %s\n' "$HOST" "$HOSTKEY" >> ~/.ssh/known_hosts
           ssh_cmd="ssh -i publish_key -o IdentitiesOnly=yes -o BatchMode=yes"
