@@ -1,5 +1,6 @@
 using System.Diagnostics;
 using System.Net.Http;
+using System.Security.Cryptography;
 using GameLauncher.Infrastructure;
 using GameLauncher.Model;
 
@@ -42,12 +43,15 @@ public sealed record SelfUpdateInfo(
 /// Старый файл цел в любой момент: он либо на месте, либо переименован и
 /// при неудаче возвращается. Остаться совсем без лаунчера нельзя.
 ///
-/// В отличие от игр, здесь сравниваются номера версий, а не отпечатки: у
-/// лаунчера теги нормальные (v0.2.0), а у игр тег dev не меняется.</summary>
+/// Сравнение — по отпечатку файла, ровно как у игр. Номера версий для этого
+/// больше не годятся: раздаётся каждая сборка из main, и у трёх подряд
+/// «v0.1.0-49», «v0.1.0-50», «v0.1.0-51» числовая часть одна и та же.
+/// Сумма же отвечает на единственный нужный вопрос — тот ли я файл, что
+/// лежит на раздаче.</summary>
 public sealed class SelfUpdateService
 {
-    /// <summary>Свой же публичный репозиторий. Токен не нужен.</summary>
-    public const string Repo = "Lonedeadly/GameLauncher";
+    /// <summary>Имя лаунчера на раздаче: meta/launcher.json.</summary>
+    public const string Id = "launcher";
 
     private const string ReplaceFlag = "--replace";
 
@@ -66,27 +70,31 @@ public sealed class SelfUpdateService
     {
         var current = AppVersion.Display;
 
-        // Локальную сборку не трогаем и запрос на неё не тратим.
+        // Локальную сборку не трогаем: подменять её раздачей — не то, чего
+        // ждёт человек, который её только что собрал.
         if (AppVersion.IsDevBuild)
             return new SelfUpdateInfo(SelfUpdateState.DevBuild, current, null, null, null);
 
         try
         {
-            var lookup = await _releases.GetAsync(Repo, force, ct);
-            var build = lookup.For(Channels.Stable);
+            var lookup = await _releases.GetAsync(Id, force, ct);
+            var build = lookup.Build;
 
             if (build is null)
                 return new SelfUpdateInfo(SelfUpdateState.Failed, current, null, null,
-                    lookup.Warning ?? "Релизов лаунчера не найдено.");
+                    lookup.Warning ?? "Сборок лаунчера на раздаче нет.");
 
-            var latest = TryParseTag(build.Tag);
-            if (latest is null)
-                return new SelfUpdateInfo(SelfUpdateState.Failed, current, build.Tag, null,
-                    $"Непонятный номер версии в теге «{build.Tag}».");
+            var mine = await OwnFingerprintAsync(ct);
 
-            return IsNewer(current, build.Tag)
-                ? new SelfUpdateInfo(SelfUpdateState.Available, current, latest.ToString(), build, null)
-                : new SelfUpdateInfo(SelfUpdateState.UpToDate, current, latest.ToString(), null, null);
+            // Свою сумму посчитать не вышло — сравнивать не с чем. Молчим:
+            // выдумать «обновление есть» тут было бы хуже, чем не ответить.
+            if (mine is null)
+                return new SelfUpdateInfo(SelfUpdateState.Failed, current, build.Version, null,
+                    "Не удалось прочитать собственный файл.");
+
+            return string.Equals(mine, build.Fingerprint, StringComparison.OrdinalIgnoreCase)
+                ? new SelfUpdateInfo(SelfUpdateState.UpToDate, current, build.Version, null, null)
+                : new SelfUpdateInfo(SelfUpdateState.Available, current, build.Version, build, null);
         }
         catch (Exception ex)
         {
@@ -95,30 +103,32 @@ public sealed class SelfUpdateService
         }
     }
 
-    /// <summary>Новее ли релиз с тегом <paramref name="tag"/>, чем версия
-    /// <paramref name="current"/>. Отдельным методом, чтобы это можно было
-    /// проверить таблицей, не пересобирая лаунчер под каждый номер.</summary>
-    public static bool IsNewer(string current, string tag)
+    /// <summary>Сумма файла, которым мы сейчас работаем.
+    ///
+    /// Считается один раз за запуск и запоминается: собственный exe за время
+    /// работы не меняется, а гонять шестьдесят мегабайт через SHA-256 каждые
+    /// пять минут незачем.</summary>
+    private static string? _own;
+
+    private static async Task<string?> OwnFingerprintAsync(CancellationToken ct)
     {
-        var mine = TryParseTag(current);
-        var theirs = TryParseTag(tag);
-        return mine is not null && theirs is not null && theirs > mine;
-    }
+        if (_own is not null) return _own;
 
-    /// <summary>«v0.2.0» и «0.2.0» — одно и то же. Суффикс вроде «-beta»
-    /// отбрасывается: System.Version его не понимает, а на «новее или нет»
-    /// он для нас не влияет.</summary>
-    public static Version? TryParseTag(string? tag)
-    {
-        if (string.IsNullOrWhiteSpace(tag)) return null;
+        var path = Environment.ProcessPath;
+        if (path is null || !File.Exists(path)) return null;
 
-        var text = tag.Trim();
-        if (text.StartsWith("v", StringComparison.OrdinalIgnoreCase)) text = text[1..];
+        try
+        {
+            await using var stream = new FileStream(
+                path, FileMode.Open, FileAccess.Read, FileShare.ReadWrite, 1 << 16, useAsync: true);
 
-        var dash = text.IndexOf('-');
-        if (dash > 0) text = text[..dash];
-
-        return Version.TryParse(text, out var version) ? version : null;
+            var hash = await SHA256.HashDataAsync(stream, ct);
+            return _own = "sha256:" + Convert.ToHexStringLower(hash);
+        }
+        catch (Exception ex) when (ex is IOException or UnauthorizedAccessException)
+        {
+            return null;
+        }
     }
 
     // ── первая половина: скачать и передать эстафету ─────────────────────
@@ -215,7 +225,7 @@ public sealed class SelfUpdateService
         {
             if (!string.Equals(actualSha, build.Sha256, StringComparison.OrdinalIgnoreCase))
                 throw new InstallException(
-                    "Контрольная сумма скачанного лаунчера не совпала с заявленной GitHub. " +
+                    "Контрольная сумма скачанного лаунчера не совпала с заявленной. " +
                     "Обновление отменено.");
             return;
         }

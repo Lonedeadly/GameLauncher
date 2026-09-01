@@ -21,27 +21,30 @@ public sealed record CatalogResult(
     string? Warning,
     DateTimeOffset? CachedAt);
 
-/// <summary>Читает catalog.json из публичного репозитория лаунчера.
+/// <summary>Читает catalog.json с раздачи.
 ///
-/// Через raw.githubusercontent.com, а не через API: другой хост, лимита
-/// 60 запросов в час не касается. Взамен у raw свой CDN-кэш около пяти
-/// минут, так что правка каталога доезжает не мгновенно.</summary>
+/// Файл кладёт туда sync-catalog.yml при каждом изменении catalog.json в
+/// репозитории лаунчера. Раздача отдаёт его с no-cache, так что правка
+/// списка доезжает сразу — в отличие от прежнего raw.githubusercontent.com
+/// с его пятиминутным CDN.</summary>
 public sealed class CatalogService
 {
-    public const int SupportedSchema = 1;
+    /// <summary>Вторая версия формата: из записей ушли repo и defaultChannel.
+    /// Каталог с бо́льшим числом лаунчер прочитает, но честно скажет, что
+    /// понимает не всё.</summary>
+    public const int SupportedSchema = 2;
 
-    public const string DefaultUrl =
-        "https://raw.githubusercontent.com/Lonedeadly/GameLauncher/main/catalog.json";
+    public const string RemotePath = "catalog.json";
 
     private readonly LibraryService _library;
-    private readonly string _url;
+    private readonly string? _url;
 
     /// <param name="url">Подменяется только самопроверкой, чтобы можно было
     /// прогнать ветку «сети нет» не отключая сеть.</param>
     public CatalogService(LibraryService library, string? url = null)
     {
         _library = library;
-        _url = url ?? DefaultUrl;
+        _url = url;
     }
 
     private string CachePath => Path.Combine(_library.CacheDir, "catalog.json");
@@ -52,11 +55,10 @@ public sealed class CatalogService
         {
             using var deadline = Http.Deadline(TimeSpan.FromSeconds(20), ct);
 
-            // no-cache просит CDN отдать свежее, насколько он может.
-            using var request = new HttpRequestMessage(HttpMethod.Get, _url);
-            request.Headers.CacheControl = new System.Net.Http.Headers.CacheControlHeaderValue { NoCache = true };
+            using var response = _url is null
+                ? await Origin.GetAsync(RemotePath, deadline.Token)
+                : await Http.Client.GetAsync(_url, deadline.Token);
 
-            using var response = await Http.Client.SendAsync(request, deadline.Token);
             response.EnsureSuccessStatusCode();
 
             var json = await response.Content.ReadAsStringAsync(deadline.Token);
@@ -121,15 +123,15 @@ public sealed class CatalogService
     /// совершенно по-разному, а сообщение «нет связи» увело бы не туда.</summary>
     private static string Describe(Exception ex) => ex switch
     {
-        TaskCanceledException => "GitHub не ответил вовремя.",
+        TaskCanceledException => $"{Origin.Host} не ответил вовремя.",
 
         HttpRequestException { StatusCode: HttpStatusCode.NotFound } =>
-            "Файл каталога не найден на GitHub.",
+            "Файл каталога не найден на раздаче.",
 
         HttpRequestException { StatusCode: { } code } =>
-            $"GitHub ответил ошибкой {(int)code}.",
+            $"Раздача ответила ошибкой {(int)code}.",
 
-        HttpRequestException => "Нет связи с GitHub.",
+        HttpRequestException => $"Нет связи с {Origin.Host}.",
 
         JsonException => "Файл каталога повреждён.",
 

@@ -6,7 +6,8 @@ namespace GameLauncher.Infrastructure;
 /// <summary>Один HttpClient на всё приложение.</summary>
 public static class Http
 {
-    /// <summary>GitHub API отказывает запросам без User-Agent.</summary>
+    /// <summary>Представляемся: в логах раздачи должно быть видно, кто
+    /// пришёл, — иначе непонятно, лаунчер это или чей-то сканер.</summary>
     public const string UserAgent = "GameLauncher (+https://github.com/Lonedeadly/GameLauncher)";
 
     public static readonly HttpClient Client = Create();

@@ -159,7 +159,7 @@
 
                     <TextBlock Text="{Binding Description}" Style="{StaticResource Dim}" Margin="0,20,0,0" />
 
-                    <!-- версии и канал -->
+                    <!-- версии -->
                     <Grid Margin="0,20,0,0">
                         <Grid.ColumnDefinitions>
                             <ColumnDefinition Width="Auto" />
@@ -168,23 +168,16 @@
                         <Grid.RowDefinitions>
                             <RowDefinition Height="Auto" />
                             <RowDefinition Height="Auto" />
-                            <RowDefinition Height="Auto" />
                         </Grid.RowDefinitions>
 
                         <TextBlock Text="Установлено" Style="{StaticResource Dim}" Margin="0,0,16,6" />
                         <TextBlock Grid.Column="1" Text="{Binding InstalledVersion}" FontFamily="Consolas" Margin="0,0,0,6" />
 
-                        <TextBlock Grid.Row="1" Text="Доступно" Style="{StaticResource Dim}" Margin="0,0,16,6" />
-                        <TextBlock Grid.Row="1" Grid.Column="1" Text="{Binding AvailableVersion}" FontFamily="Consolas" Margin="0,0,0,6" />
-
-                        <TextBlock Grid.Row="2" Text="Канал" Style="{StaticResource Dim}" Margin="0,0,16,0" VerticalAlignment="Center" />
-                        <ComboBox Grid.Row="2" Grid.Column="1" Width="150" HorizontalAlignment="Left"
-                                  ItemsSource="{Binding ChannelOptions}"
-                                  SelectedItem="{Binding Channel, Mode=TwoWay}"
-                                  IsEnabled="{Binding IsIdle}" />
+                        <TextBlock Grid.Row="1" Text="Доступно" Style="{StaticResource Dim}" Margin="0,0,16,0" />
+                        <TextBlock Grid.Row="1" Grid.Column="1" Text="{Binding AvailableVersion}" FontFamily="Consolas" />
                     </Grid>
 
-                    <!-- примечание: сборок нет, канал сменён, GitHub недоступен -->
+                    <!-- примечание: сборок нет, раздача недоступна -->
                     <TextBlock Text="{Binding Note}" Foreground="#FFE7C88A" Margin="0,16,0,0"
                                Visibility="{Binding HasNote, Converter={StaticResource BoolToVis}}" />
 
@@ -237,7 +230,7 @@
                 <TextBlock Grid.Column="1" Text="{Binding LauncherVersion}" Style="{StaticResource Dim}"
                            FontSize="11" VerticalAlignment="Center" Margin="12,0,0,0" />
 
-                <TextBlock Grid.Column="2" Text="{Binding RateLimit}" Style="{StaticResource Dim}"
+                <TextBlock Grid.Column="2" Text="{Binding Checked}" Style="{StaticResource Dim}"
                            FontSize="11" VerticalAlignment="Center" Margin="12,0" />
 
                 <Button Grid.Column="3" Content="Обновить" Padding="12,5"

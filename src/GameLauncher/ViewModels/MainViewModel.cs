@@ -1,5 +1,6 @@
 using System.Collections.ObjectModel;
 using System.Windows.Input;
+using System.Windows.Threading;
 using GameLauncher.Infrastructure;
 using GameLauncher.Services;
 
@@ -7,7 +8,13 @@ namespace GameLauncher.ViewModels;
 
 public sealed class MainViewModel : ObservableObject
 {
-    private readonly SettingsService _settings;
+    /// <summary>Как часто лаунчер спрашивает раздачу сам, без просьбы.
+    ///
+    /// Пять минут — не про нагрузку: четыре файла по полкилобайта серверу
+    /// безразличны. Это про то, через сколько человек, оставивший окно
+    /// открытым, узнаёт о новой сборке, не нажимая ничего.</summary>
+    public static readonly TimeSpan AutoInterval = TimeSpan.FromMinutes(5);
+
     private readonly LibraryService _library;
     private readonly CatalogService _catalog;
     private readonly ReleaseService _releases;
@@ -16,8 +23,12 @@ public sealed class MainViewModel : ObservableObject
     private readonly Func<string, bool> _confirm;
     private readonly Action _quit;
 
+    /// <summary>Живёт столько же, сколько окно. Поле, а не локальная
+    /// переменная: без ссылки таймер соберёт сборщик мусора, и тиков просто
+    /// не будет — молча.</summary>
+    private readonly DispatcherTimer _timer;
+
     public MainViewModel(
-        SettingsService settings,
         LibraryService library,
         CatalogService catalog,
         ReleaseService releases,
@@ -26,7 +37,6 @@ public sealed class MainViewModel : ObservableObject
         Func<string, bool> confirm,
         Action quit)
     {
-        _settings = settings;
         _library = library;
         _catalog = catalog;
         _releases = releases;
@@ -39,6 +49,32 @@ public sealed class MainViewModel : ObservableObject
         UpdateLauncherCommand = new AsyncRelayCommand(
             UpdateLauncherAsync, () => !LauncherBusy && _launcher.Build is not null);
         Games.CollectionChanged += (_, _) => Raise(nameof(IsEmpty));
+
+        _timer = new DispatcherTimer { Interval = AutoInterval };
+        _timer.Tick += (_, _) => _ = AutoCheckAsync();
+        _timer.Start();
+    }
+
+    /// <summary>Тик таймера. Молча: полоса загрузки не мигает, выбор не
+    /// сбивается, а если ответа нет — в карточке просто останется прежнее.
+    ///
+    /// Во время установки не лезем. Дело не в сети: подмена статуса под
+    /// работающей полосой прогресса — это мигание кнопок ровно там, где
+    /// человек смотрит на них не отрываясь.</summary>
+    private async Task AutoCheckAsync()
+    {
+        if (IsLoading || LauncherBusy || Games.Any(g => g.IsBusy)) return;
+
+        await LoadAsync(force: false, quiet: true);
+    }
+
+    /// <summary>Открыли вкладку игры — спросили про неё. Нижний предел в
+    /// <see cref="ReleaseService.MinInterval"/> не даёт щёлканью по списку
+    /// превратиться в поток запросов.</summary>
+    private async Task CheckSelectedAsync(GameViewModel game)
+    {
+        await game.LoadReleasesAsync(force: false);
+        if (ReferenceEquals(_selected, game)) UpdateChecked();
     }
 
     public ObservableCollection<GameViewModel> Games { get; } = [];
@@ -49,7 +85,13 @@ public sealed class MainViewModel : ObservableObject
     public GameViewModel? Selected
     {
         get => _selected;
-        set { if (Set(ref _selected, value)) Raise(nameof(HasSelection)); }
+        set
+        {
+            if (!Set(ref _selected, value)) return;
+
+            Raise(nameof(HasSelection));
+            if (value is not null) _ = CheckSelectedAsync(value);
+        }
     }
 
     public bool HasSelection => _selected is not null;
@@ -73,12 +115,18 @@ public sealed class MainViewModel : ObservableObject
 
     public string LibraryPath => _library.Root;
 
-    private string _rateLimit = "";
-    public string RateLimit { get => _rateLimit; private set => Set(ref _rateLimit, value); }
+    private string _checked = "";
+    /// <summary>«проверено в 14:32». Занимает строку внизу не ради красоты:
+    /// без неё нельзя отличить «обновлений нет» от «спросить не вышло, и я
+    /// показываю позавчерашнее».</summary>
+    public string Checked { get => _checked; private set => Set(ref _checked, value); }
 
-    public async Task LoadAsync(bool force = false)
+    /// <param name="quiet">Проверка по таймеру: без полосы загрузки. Она
+    /// оправданна, когда человек нажал кнопку, и раздражает, когда он ничего
+    /// не нажимал.</param>
+    public async Task LoadAsync(bool force = false, bool quiet = false)
     {
-        IsLoading = true;
+        if (!quiet) IsLoading = true;
         try
         {
             var result = await _catalog.LoadAsync();
@@ -88,15 +136,15 @@ public sealed class MainViewModel : ObservableObject
 
             Notice = BuildNotice(result);
 
-            // Витрины опрашиваем параллельно: их немного, а ждать их подряд
-            // означало бы ждать сумму таймаутов, если GitHub недоступен.
-            // Свой репозиторий — там же: он такая же витрина, просто наша.
+            // Игры опрашиваем параллельно: их немного, а ждать их подряд
+            // означало бы ждать сумму таймаутов, если раздача недоступна.
+            // Сам лаунчер — там же: такой же файл на той же раздаче.
             await Task.WhenAll(
                 Games.Select(g => g.LoadReleasesAsync(force))
                      .Append(CheckLauncherAsync(force)));
 
             Selected = Games.FirstOrDefault(g => g.Entry.Id == previouslySelected) ?? Games.FirstOrDefault();
-            UpdateRateLimit();
+            UpdateChecked();
         }
         catch (Exception ex)
         {
@@ -106,7 +154,7 @@ public sealed class MainViewModel : ObservableObject
         }
         finally
         {
-            IsLoading = false;
+            if (!quiet) IsLoading = false;
         }
     }
 
@@ -121,7 +169,7 @@ public sealed class MainViewModel : ObservableObject
         foreach (var entry in entries)
         {
             if (Games.Any(g => g.Entry.Id == entry.Id)) continue;
-            Games.Add(new GameViewModel(entry, _settings, _library, _releases, _install, _confirm));
+            Games.Add(new GameViewModel(entry, _library, _releases, _install, _confirm));
         }
     }
 
@@ -269,8 +317,6 @@ public sealed class MainViewModel : ObservableObject
         }
     }
 
-    private void UpdateRateLimit() =>
-        RateLimit = _releases.RateLimitRemaining is { } left
-            ? $"Запросов к GitHub осталось: {left}/60"
-            : "";
+    private void UpdateChecked() =>
+        Checked = $"проверено в {DateTime.Now:HH:mm}";
 }

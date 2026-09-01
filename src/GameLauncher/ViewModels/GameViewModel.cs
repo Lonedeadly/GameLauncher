@@ -7,7 +7,6 @@ namespace GameLauncher.ViewModels;
 /// <summary>Одна игра в списке и её карточка справа.</summary>
 public sealed class GameViewModel : ObservableObject
 {
-    private readonly SettingsService _settings;
     private readonly LibraryService _library;
     private readonly ReleaseService _releases;
     private readonly InstallService _install;
@@ -15,25 +14,21 @@ public sealed class GameViewModel : ObservableObject
 
     private ReleaseLookup? _lookup;
     private GameStatus _status;
-    private string _channel;
 
     public GameViewModel(
         CatalogEntry entry,
-        SettingsService settings,
         LibraryService library,
         ReleaseService releases,
         InstallService install,
         Func<string, bool> confirm)
     {
         Entry = entry;
-        _settings = settings;
         _library = library;
         _releases = releases;
         _install = install;
         _confirm = confirm;
 
-        _channel = settings.GetChannel(entry);
-        _status = GameStatus.Compute(entry, _channel, library.GetInstalled(entry.Id), null);
+        _status = GameStatus.Compute(entry, library.GetInstalled(entry.Id), null);
 
         PrimaryCommand = new AsyncRelayCommand(PrimaryAsync, () => !IsBusy && (CanPlay || CanInstallOrUpdate));
         UninstallCommand = new AsyncRelayCommand(UninstallAsync, () => !IsBusy && _status.CanUninstall);
@@ -50,23 +45,6 @@ public sealed class GameViewModel : ObservableObject
     public ICommand PrimaryCommand { get; }
     public ICommand UninstallCommand { get; }
 
-    // ── канал ────────────────────────────────────────────────────────────
-
-    public IReadOnlyList<string> ChannelOptions { get; } = Channels.All;
-
-    public string Channel
-    {
-        get => _channel;
-        set
-        {
-            var normalized = Channels.Normalize(value);
-            if (!Set(ref _channel, normalized)) return;
-
-            _settings.SetChannel(Entry.Id, normalized);
-            RefreshStatus();
-        }
-    }
-
     // ── состояние, видное без нажатий ────────────────────────────────────
 
     public string StateCaption => _status.StateCaption;
@@ -80,7 +58,7 @@ public sealed class GameViewModel : ObservableObject
     public bool CanInstallOrUpdate => _status.CanInstallOrUpdate;
     public bool CanUninstall => _status.CanUninstall;
 
-    /// <summary>Когда сборок в канале нет вовсе, кнопки быть не должно —
+    /// <summary>Когда сборок нет вовсе, кнопки быть не должно —
     /// не «Установить», которая ничего не сделает, а просто ничего.</summary>
     public bool ShowPrimary => CanPlay || CanInstallOrUpdate;
 
@@ -124,7 +102,7 @@ public sealed class GameViewModel : ObservableObject
     {
         try
         {
-            var lookup = await _releases.GetAsync(Entry.Repo, force, ct);
+            var lookup = await _releases.GetAsync(Entry.Id, force, ct);
             _lookup = lookup;
             Warning = lookup.Warning;
         }
@@ -141,8 +119,7 @@ public sealed class GameViewModel : ObservableObject
 
     private void RefreshStatus()
     {
-        _status = GameStatus.Compute(
-            Entry, _channel, _library.GetInstalled(Entry.Id), _lookup?.For(_channel));
+        _status = GameStatus.Compute(Entry, _library.GetInstalled(Entry.Id), _lookup?.Build);
 
         RaiseAll(
             nameof(StateCaption), nameof(InstalledVersion), nameof(AvailableVersion),
@@ -157,7 +134,7 @@ public sealed class GameViewModel : ObservableObject
         Error = null;
 
         // Играть можно всегда, когда игра на диске: запуск не должен
-        // зависеть от того, ответил ли GitHub.
+        // зависеть от того, ответила ли раздача.
         if (!CanInstallOrUpdate)
         {
             Play();
@@ -176,7 +153,14 @@ public sealed class GameViewModel : ObservableObject
         catch (InstallException ex)
         {
             Error = ex.Message;
+            return;
         }
+
+        // Проверка после запуска, а не до: игра уже открывается, и ждать
+        // ответа сети было бы задержкой ровно там, где человек её меньше
+        // всего готов терпеть. Ответ придёт через секунду и обновит
+        // карточку — к следующему разу «Обновить» уже будет на месте.
+        _ = LoadReleasesAsync(force: false);
     }
 
     private async Task InstallAsync()

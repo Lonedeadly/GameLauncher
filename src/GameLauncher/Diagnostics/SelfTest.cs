@@ -63,7 +63,7 @@ public static class SelfTest
             await TestSelfUpdate(library, releases, args);
 
             TestBuildInfoForms();
-            TestEmptyShowcase(library, catalog, lookups);
+            await TestGameWithoutBuilds(library, releases);
             await TestCatalogOffline(library, workDir);
 
             await TestInstallCycle(library, releases, catalog, lookups);
@@ -190,93 +190,99 @@ public static class SelfTest
 
     // ── 4. релизы ────────────────────────────────────────────────────────
 
-    private static LibraryService? _libraryForCacheProbe;
-
     private static async Task<Dictionary<string, ReleaseLookup>> TestReleases(
         ReleaseService releases, Catalog catalog, LibraryService library)
     {
-        _libraryForCacheProbe = library;
-        Head("Релизы");
+        Head("Сборки");
         var lookups = new Dictionary<string, ReleaseLookup>(StringComparer.OrdinalIgnoreCase);
 
         foreach (var game in catalog.Games)
         {
-            var lookup = await releases.GetAsync(game.Repo);
+            var lookup = await releases.GetAsync(game.Id);
             lookups[game.Id] = lookup;
 
-            Line($"{game.Repo}");
+            Line($"{game.Id}");
             Line($"  источник     {lookup.Source}");
             if (lookup.Warning is not null) Line($"  замечание    {lookup.Warning}");
 
-            foreach (var channel in Channels.All)
+            if (lookup.Build is null)
             {
-                var build = lookup.For(channel);
-                if (build is null)
-                {
-                    Line($"  {channel,-8}     сборок нет");
-                    continue;
-                }
-
-                Line($"  {channel,-8}     тег {build.Tag}, {build.AssetName}, {build.Size / 1024} КБ");
-                Line($"               отпечаток {build.Fingerprint}");
-                Line($"               коммит из описания: {build.CommitHint ?? "—"}");
-                Check(build.HasStrongFingerprint, $"{channel}: digest получен без скачивания архива");
-                Check(build.AssetName.EndsWith("-win64.zip", StringComparison.OrdinalIgnoreCase),
-                    $"{channel}: имя ассета по контракту");
+                Line("  сборок нет");
+                continue;
             }
+
+            var build = lookup.Build;
+            Line($"  версия       {build.Version}");
+            Line($"  файл         {build.FileName}, {build.Size / 1024} КБ");
+            Line($"  путь         {build.RelativePath}");
+            Line($"  отпечаток    {build.Fingerprint}");
+
+            Check(build.Sha256.Length == 64, "sha256 получен до скачивания");
+            Check(build.Size > 0, "размер известен до скачивания");
+            Check(build.RelativePath.StartsWith($"files/{game.Id}/", StringComparison.Ordinal),
+                "путь к архиву лежит в папке своей игры");
+            Check(build.FileName.EndsWith("-win64.zip", StringComparison.OrdinalIgnoreCase),
+                "имя архива по контракту");
+            Check(build.DownloadUrl.StartsWith($"https://{Origin.Host}", StringComparison.Ordinal),
+                $"качать будем с раздачи: {build.DownloadUrl}");
         }
 
-        Line($"остаток лимита GitHub: {releases.RateLimitRemaining?.ToString() ?? "неизвестно"}" +
-             (releases.RateLimitReset is { } r ? $", сброс в {r.ToLocalTime():HH:mm}" : ""));
+        // Повторный заход в те же полминуты обязан прийти из кэша: щёлканье
+        // по списку не должно превращаться в поток запросов.
+        foreach (var game in catalog.Games)
+        {
+            var again = await releases.GetAsync(game.Id);
+            Check(again.Source == ReleaseSource.Cache,
+                $"{game.Id}: повторный опрос обслужен кэшем ({again.Source})");
+        }
 
-        // Ноль в остатке — это не поломка лаунчера, а исчерпанный анонимный
-        // лимит GitHub: 60 запросов в час на адрес. Сказать об этом надо
-        // громко: иначе прогон выглядит как внезапный отказ всего сразу.
-        if (releases.RateLimitRemaining == 0)
-            Line("ВНИМАНИЕ: лимит исчерпан. Всё, что ниже опирается на сеть, " +
-                 "провалится не из-за кода. Дождитесь сброса и повторите.");
-
-        // Второй заход обязан прийти из кэша и не потратить ни одного запроса.
-        var before = releases.RateLimitRemaining;
-        foreach (var game in catalog.Games) await releases.GetAsync(game.Repo);
-        Check(releases.RateLimitRemaining == before, "повторный опрос обслужен кэшем, лимит не потрачен");
+        // А нажатие кнопки человеком обязано этот предел обойти: отвечать
+        // кэшем на осознанное «проверить» — значит врать.
+        var forced = await releases.GetAsync(catalog.Games[0].Id, force: true);
+        Check(forced.Source == ReleaseSource.Network,
+            $"«проверить» идёт в сеть, минуя предел ({forced.Source})");
 
         // А это уже кэш С ДИСКА: новый экземпляр сервиса ничего не помнит,
         // как при следующем запуске лаунчера. Путь через файл иначе вообще
         // не проверялся бы — первый прогон всегда идёт в сеть.
-        var fresh = new ReleaseService(_libraryForCacheProbe!);
-        var repo = catalog.Games[0].Repo;
-        var fromDisk = await fresh.GetAsync(repo);
+        var fresh = new ReleaseService(library);
+        var first = catalog.Games[0];
+        var fromDisk = await fresh.GetAsync(first.Id);
         Check(fromDisk.Source == ReleaseSource.Cache, $"кэш прочитан с диска: {fromDisk.Source}");
-        Check(fresh.RateLimitRemaining is null, "запроса к сети при этом не было");
-        Check(fromDisk.ByChannel.Count == lookups[catalog.Games[0].Id].ByChannel.Count,
-            "с диска поднялось столько же каналов, сколько было в сети");
+        Check(fromDisk.Build?.Fingerprint == lookups[first.Id].Build?.Fingerprint,
+            "с диска поднялось то же самое, что пришло из сети");
 
         return lookups;
     }
 
-    // ── 4б. пустая витрина ───────────────────────────────────────────────
+    // ── 4б. игра без сборок ──────────────────────────────────────────────
 
-    /// <summary>Игра, у которой релизов ещё нет, обязана быть в списке —
-    /// с внятным состоянием и без кнопки «Установить».</summary>
-    private static void TestEmptyShowcase(
-        LibraryService library, Catalog catalog, Dictionary<string, ReleaseLookup> lookups)
+    /// <summary>Игра, которую ещё ни разу не собирали, обязана остаться в
+    /// списке — с внятным состоянием и без кнопки «Установить».
+    ///
+    /// Раньше для этого искали витрину без релизов среди настоящих. Теперь
+    /// проверка честнее: спрашиваем раздачу про заведомо несуществующее имя
+    /// и смотрим, что 404 понят как ответ, а не как поломка связи.</summary>
+    private static async Task TestGameWithoutBuilds(LibraryService library, ReleaseService releases)
     {
-        Head("Витрина без релизов");
+        Head("Игра без сборок");
 
-        var empty = catalog.Games.FirstOrDefault(g =>
-            lookups.TryGetValue(g.Id, out var l) && l.Source == ReleaseSource.Network && l.ByChannel.Count == 0);
-
-        if (empty is null)
+        var entry = new CatalogEntry
         {
-            Fail("Не нашлось витрины без релизов — случай не проверен.");
-            return;
-        }
+            Id = "no-such-game",
+            Name = "Игра, которой нет",
+            Exe = "nothing.exe",
+        };
 
-        Line($"игра           {empty.Name} ({empty.Id}), витрина {empty.Repo}");
-        Check(catalog.Games.Any(g => g.Id == empty.Id), "игра осталась в списке, а не пропала");
+        var lookup = await releases.GetAsync(entry.Id);
 
-        var status = GameStatus.Compute(empty, Channels.Dev, library.GetInstalled(empty.Id), null);
+        Line($"источник       {lookup.Source}");
+        if (lookup.Warning is not null) Line($"замечание      {lookup.Warning}");
+
+        Check(lookup.Source == ReleaseSource.Network, "404 — это ответ раздачи, а не обрыв связи");
+        Check(lookup.Build is null, "сборки нет, и это не ошибка");
+
+        var status = GameStatus.Compute(entry, library.GetInstalled(entry.Id), lookup.Build);
         Check(status.State == GameState.NotInstalled, $"состояние: {status.StateCaption}");
         Check(!status.CanInstallOrUpdate, "кнопки «Установить» нет — ставить нечего");
         Check(!status.CanPlay, "кнопки «Играть» нет");
@@ -301,7 +307,7 @@ public static class SelfTest
         File.Copy(localPath, cachePath, overwrite: true);
 
         // Заведомо несуществующий хост — сеть при этом отключать не нужно.
-        var offline = new CatalogService(library, "https://raw.githubusercontent.invalid/nope/catalog.json");
+        var offline = new CatalogService(library, "https://game.lonedeadly.invalid/catalog.json");
         var result = await offline.LoadAsync();
 
         Line($"источник       {result.Source}");
@@ -314,7 +320,7 @@ public static class SelfTest
         var bare = Path.Combine(workDir, "library-empty");
         var lib2 = new LibraryService();
         lib2.Open(bare);
-        var cold = await new CatalogService(lib2, "https://raw.githubusercontent.invalid/nope/catalog.json").LoadAsync();
+        var cold = await new CatalogService(lib2, "https://game.lonedeadly.invalid/catalog.json").LoadAsync();
         Check(cold.Source == CatalogSource.None, "без копии и без сети — состояние None, а не исключение");
     }
 
@@ -327,18 +333,18 @@ public static class SelfTest
         Head("Установка");
 
         var pick = catalog.Games.FirstOrDefault(g =>
-            lookups.TryGetValue(g.Id, out var l) && l.For(Channels.Dev) is not null);
+            lookups.TryGetValue(g.Id, out var l) && l.Build is not null);
 
         if (pick is null)
         {
-            Fail("Ни у одной игры нет dev-сборки — цикл установки не проверить.");
+            Fail("Ни у одной игры нет сборки — цикл установки не проверить.");
             return;
         }
 
-        var remote = lookups[pick.Id].For(Channels.Dev)!;
-        Line($"игра           {pick.Name} ({pick.Id}), канал dev, тег {remote.Tag}");
+        var remote = lookups[pick.Id].Build!;
+        Line($"игра           {pick.Name} ({pick.Id}), версия {remote.Version}");
 
-        var status = GameStatus.Compute(pick, Channels.Dev, library.GetInstalled(pick.Id), remote);
+        var status = GameStatus.Compute(pick, library.GetInstalled(pick.Id), remote);
         Check(status.State == GameState.NotInstalled, $"до установки: {status.StateCaption} / кнопка «{status.PrimaryAction}»");
 
         var install = new InstallService(library);
@@ -350,7 +356,8 @@ public static class SelfTest
 
         var installed = await install.InstallAsync(pick, remote, progress);
 
-        Line($"поставлено     коммит {installed.Commit?[..7]}, {installed.SizeOnDisk / 1024} КБ на диске");
+        Line($"поставлено     version «{installed.Version ?? "—"}», коммит {Short(installed.Commit)}, " +
+             $"{installed.SizeOnDisk / 1024} КБ на диске");
         Line($"фазы прогресса {string.Join(" → ", phases)}");
 
         var gameDir = library.GameDir(pick.Id);
@@ -363,14 +370,20 @@ public static class SelfTest
         foreach (var e in Directory.EnumerateFileSystemEntries(gameDir).OrderBy(x => x))
             Line($"  {(Directory.Exists(e) ? "[папка] " : "        ")}{Path.GetFileName(e)}");
 
-        // Коммит из build.json обязан совпасть с тем, что GitHub написал в
-        // описании релиза — это перекрёстная проверка контракта.
-        if (remote.CommitHint is { Length: >= 7 } hint)
-            Check(installed.Commit?.StartsWith(hint, StringComparison.OrdinalIgnoreCase) == true,
-                $"коммит из build.json ({installed.Commit?[..7]}) совпал с описанием релиза ({hint})");
+        // Коммит из build.json обязан совпасть с тем, что раздача написала в
+        // meta — это перекрёстная проверка контракта: один и тот же прогон
+        // сборки писал оба файла, и разойтись они не имеют права.
+        if (remote.Commit is { Length: >= 7 })
+            Check(string.Equals(installed.Commit, remote.Commit, StringComparison.OrdinalIgnoreCase),
+                $"коммит из build.json ({Short(installed.Commit)}) совпал с meta ({remote.ShortCommit})");
 
-        status = GameStatus.Compute(pick, Channels.Dev, library.GetInstalled(pick.Id), remote);
+        Check(installed.Version == remote.Version,
+            $"version из build.json совпала с meta: «{installed.Version}»");
+
+        status = GameStatus.Compute(pick, library.GetInstalled(pick.Id), remote);
         Check(status.State == GameState.UpToDate, $"после установки: {status.StateCaption} / кнопка «{status.PrimaryAction}»");
+        Check(status.InstalledVersion == status.AvailableVersion,
+            $"установленная и доступная версии сошлись: «{status.InstalledVersion}»");
 
         Check(library.CacheDir.StartsWith(library.Root), "кэш лежит внутри папки библиотеки");
         Check(!Directory.EnumerateFileSystemEntries(library.TempDir).Any(), "временная папка убрана за собой");
@@ -379,7 +392,7 @@ public static class SelfTest
         TestOfflinePlayability(library, pick);
         TestActuallyRuns(install, pick, gameDir);
 
-        await TestChannelSwitch(library, install, pick, lookups[pick.Id]);
+        TestUpdateDetection(library, pick, remote);
 
         // --keep оставляет игру установленной: нужно, чтобы потом посмотреть
         // на карточку в состоянии «установлена».
@@ -388,6 +401,9 @@ public static class SelfTest
         else
             TestUninstall(library, install, pick, gameDir);
     }
+
+    private static string Short(string? commit) =>
+        commit is { Length: >= 7 } ? commit[..7] : commit ?? "—";
 
     /// <summary>Главное свойство обновления: это замена папки, а не докачка
     /// поверх. Файл, которого нет в новой версии, обязан исчезнуть.</summary>
@@ -413,15 +429,15 @@ public static class SelfTest
         Check(File.Exists(Path.Combine(gameDir, pick.Exe)), $"{pick.Exe} при этом на месте");
     }
 
-    /// <summary>«Играть» не имеет права зависеть от GitHub: моделируем полное
-    /// отсутствие сведений о релизах.</summary>
+    /// <summary>«Играть» не имеет права зависеть от раздачи: моделируем
+    /// полное отсутствие сведений о сборках.</summary>
     private static void TestOfflinePlayability(LibraryService library, CatalogEntry pick)
     {
         Head("Запуск без сети");
 
-        var status = GameStatus.Compute(pick, Channels.Dev, library.GetInstalled(pick.Id), remote: null);
+        var status = GameStatus.Compute(pick, library.GetInstalled(pick.Id), remote: null);
 
-        Check(status.CanPlay, "установленную игру можно запустить без ответа от GitHub");
+        Check(status.CanPlay, "установленную игру можно запустить без ответа от раздачи");
         Check(status.PrimaryAction == "Играть", $"кнопка: «{status.PrimaryAction}»");
         Check(status.State == GameState.InstalledUnknown, $"состояние: {status.StateCaption}");
         Check(status.Note is { Length: > 0 }, $"честно сказано: {status.Note}");
@@ -517,7 +533,7 @@ public static class SelfTest
 
         // И то же самое на уровне карточки: показ идёт от version, а без
         // него — от коммита.
-        var entry = new CatalogEntry { Id = "x", Name = "X", Repo = "r/r", Exe = "x.exe" };
+        var entry = new CatalogEntry { Id = "x", Name = "X", Exe = "x.exe" };
         Check(Card(entry, version: null, commit: "496ad05f1c2a3b4d").InstalledVersion == "496ad05",
             "в карточке без version показан короткий commit");
         Check(Card(entry, version: "v0.1.0-1-ge20a5c4", commit: "e20a5c4b").InstalledVersion
@@ -528,74 +544,59 @@ public static class SelfTest
             System.Text.Json.JsonSerializer.Deserialize<BuildInfo>(json, Json.Local);
 
         static GameStatus Card(CatalogEntry entry, string? version, string commit) =>
-            GameStatus.Compute(entry, Channels.Dev,
-                new InstalledGame { Id = entry.Id, Channel = Channels.Dev, Version = version, Commit = commit },
+            GameStatus.Compute(entry,
+                new InstalledGame { Id = entry.Id, Version = version, Commit = commit },
                 null);
     }
 
-    /// <summary>Переключение канала. Проверять его стало на чём: у витрины
-    /// появился стабильный релиз рядом с движущимся dev.</summary>
-    private static async Task TestChannelSwitch(
-        LibraryService library, InstallService install, CatalogEntry pick, ReleaseLookup lookup)
+    /// <summary>Как лаунчер узнаёт, что вышло обновление.
+    ///
+    /// Сравнение идёт по сумме архива, а не по строке версии, и проверить
+    /// это надо именно так: подсунуть сборку с ТОЙ ЖЕ версией, но другим
+    /// содержимым, и убедиться, что обновление всё равно замечено. Ждать
+    /// ради этого настоящего пуша в main нельзя — метаданные подделываем,
+    /// ничего при этом не скачивая.</summary>
+    private static void TestUpdateDetection(
+        LibraryService library, CatalogEntry pick, RemoteBuild current)
     {
-        Head("Переключение канала");
+        Head("Обнаружение обновления");
 
-        var stable = lookup.For(Channels.Stable);
-        var dev = lookup.For(Channels.Dev);
+        var installed = library.GetInstalled(pick.Id);
+        Check(installed is not null, "игра на диске — есть от чего отталкиваться");
+        if (installed is null) return;
 
-        if (stable is null)
+        // То же самое, что стоит.
+        var same = GameStatus.Compute(pick, installed, current);
+        Check(same.State == GameState.UpToDate, $"та же сборка: {same.StateCaption}");
+
+        // Новый коммит: и версия другая, и сумма другая — обычный случай.
+        var next = current with
         {
-            Line("стабильных сборок нет — переключать не на что");
-            return;
-        }
+            Version = current.Version + "-next",
+            Commit = new string('a', 40),
+            Sha256 = new string('b', 64),
+            RelativePath = $"files/{pick.Id}/aaaaaaa/{current.FileName}",
+        };
 
-        Line($"stable         тег {stable.Tag}, {stable.AssetName}");
-        Line($"dev            тег {dev?.Tag ?? "—"}");
+        var update = GameStatus.Compute(pick, installed, next);
+        Check(update.State == GameState.UpdateAvailable,
+            $"новая сборка: {update.StateCaption} / кнопка «{update.PrimaryAction}»");
+        Check(update.CanInstallOrUpdate, "кнопка обновления доступна");
+        Check(update.CanPlay, "и играть в старую версию по-прежнему можно");
+        Check(update.AvailableVersion == next.Version,
+            $"доступная версия показана: «{update.AvailableVersion}»");
 
-        // Сейчас на диске dev. Смена канала обязана читаться как обновление,
-        // а не как «уже свежее»: это тоже замена содержимого папки.
-        var status = GameStatus.Compute(pick, Channels.Stable, library.GetInstalled(pick.Id), stable);
-        Check(status.State == GameState.UpdateAvailable,
-            $"выбран другой канал → {status.StateCaption} / кнопка «{status.PrimaryAction}»");
-        Check(status.Note is not null, $"причина названа: {status.Note}");
+        // А это то, ради чего сравнение по сумме и делалось: версия та же,
+        // содержимое другое. По строке версии обновление было бы пропущено.
+        var rebuilt = current with { Sha256 = new string('c', 64) };
+        Check(GameStatus.Compute(pick, installed, rebuilt).State == GameState.UpdateAvailable,
+            "пересборка с той же версией, но другим архивом — тоже обновление");
 
-        var installed = await install.InstallAsync(pick, stable);
-        Line($"поставлено     version «{installed.Version ?? "—"}», коммит {installed.Commit?[..7]}");
-
-        Check(installed.Channel == Channels.Stable, "в state.json записан канал лаунчера");
-        Check(installed.Version is { Length: > 0 }, "в build.json есть поле version");
-
-        status = GameStatus.Compute(pick, Channels.Stable, library.GetInstalled(pick.Id), stable);
-
-        // Главная проверка этого раздела. В build.json стабильной сборки
-        // channel равен тегу («v0.1.0»). Если бы лаунчер брал канал оттуда,
-        // он решил бы, что канал сменился, сразу после установки.
-        Check(status.State == GameState.UpToDate,
-            $"после установки stable: {status.StateCaption} — channel из build.json не подхвачен");
-
-        Check(status.InstalledVersion == installed.Version,
-            $"установленная версия показана как version: «{status.InstalledVersion}»");
-        Check(status.AvailableVersion == stable.Tag,
-            $"доступная версия показана тегом: «{status.AvailableVersion}»");
-        Check(File.Exists(Path.Combine(library.GameDir(pick.Id), pick.Exe)),
-            $"{pick.Exe} на месте после смены канала");
-
-        if (dev is null) return;
-
-        // И обратно, чтобы дальше всё шло от того же состояния, что и раньше.
-        var back = GameStatus.Compute(pick, Channels.Dev, library.GetInstalled(pick.Id), dev);
-        Check(back.State == GameState.UpdateAvailable,
-            $"возврат на dev → {back.StateCaption} / кнопка «{back.PrimaryAction}»");
-
-        var again = await install.InstallAsync(pick, dev);
-        Line($"вернули        version «{again.Version ?? "—"}»");
-
-        var final = GameStatus.Compute(pick, Channels.Dev, library.GetInstalled(pick.Id), dev);
-        Check(final.State == GameState.UpToDate, $"снова dev: {final.StateCaption}");
-        Check(final.InstalledVersion == again.Version,
-            $"показана version dev-сборки: «{final.InstalledVersion}»");
-        Check(final.AvailableVersion != Channels.Dev,
-            $"в dev показан не тег, а коммит: «{final.AvailableVersion}»");
+        // И обратное: сумма та же, версия в meta переписана. Скачивать
+        // заново нечего, файл на диске уже этот.
+        var relabeled = current with { Version = "v9.9.9" };
+        Check(GameStatus.Compute(pick, installed, relabeled).State == GameState.UpToDate,
+            "другая надпись версии при той же сумме обновлением не считается");
     }
 
     private static void TestUninstall(
@@ -623,25 +624,6 @@ public static class SelfTest
         Line($"своя версия    {AppVersion.Display}" +
              (AppVersion.IsDevBuild ? " (сборка из исходников)" : ""));
 
-        // Сравнение версий таблицей: пересобирать лаунчер под каждый номер,
-        // чтобы проверить «новее или нет», было бы издевательством.
-        var cases = new (string Current, string Tag, bool Expected, string Why)[]
-        {
-            ("0.1.0", "v0.2.0",      true,  "следующая минорная новее"),
-            ("0.1.0", "v0.1.1",      true,  "следующая патч новее"),
-            ("0.1.0", "v1.0.0",      true,  "следующая мажорная новее"),
-            ("0.1.0", "v0.1.0",      false, "та же самая не новее"),
-            ("0.2.0", "v0.1.9",      false, "предыдущая не новее"),
-            ("0.1.0", "0.2.0",       true,  "тег без «v» тоже понимается"),
-            ("0.1.0", "v0.2.0-beta", true,  "суффикс не мешает сравнению"),
-            ("0.1.0", "dev",         false, "движущийся тег не версия"),
-            ("0.1.0", "",            false, "пустой тег не версия"),
-        };
-
-        foreach (var (current, tag, expected, why) in cases)
-            Check(SelfUpdateService.IsNewer(current, tag) == expected,
-                $"{current} против «{tag}» → {(expected ? "новее" : "не новее")}: {why}");
-
         // Имена соседей: от них зависит, что мы удалим при уборке.
         var sample = Path.Combine("C:", "игры", "GameLauncher.exe");
         Check(SelfUpdateService.Sibling(sample, ".new")
@@ -651,7 +633,7 @@ public static class SelfTest
                   .EndsWith("Мой лаунчер.old.exe", StringComparison.Ordinal),
             "переименованный exe тоже обслуживается");
 
-        // Живой запрос к своему же репозиторию.
+        // Живой запрос к своей же раздаче.
         var service = new SelfUpdateService(library, releases);
         var info = await service.CheckAsync();
 
@@ -661,30 +643,33 @@ public static class SelfTest
         if (AppVersion.IsDevBuild)
         {
             Check(info.State == SelfUpdateState.DevBuild,
-                "сборка из исходников не предлагает подменить себя релизной");
-            Check(info.Build is null, "и запроса на неё не тратит");
+                "сборка из исходников не предлагает подменить себя раздачной");
+            Check(info.Build is null, "и в сеть за этим не ходит");
         }
         else
         {
             Check(info.State is SelfUpdateState.Available or SelfUpdateState.UpToDate,
-                $"релиз лаунчера найден, последний {info.Latest ?? "—"}");
+                $"сборка лаунчера найдена, последняя {info.Latest ?? "—"}");
         }
 
-        // Отдельно — то, что видно и на dev-сборке: как выглядит наш релиз.
-        var lookup = await releases.GetAsync(SelfUpdateService.Repo);
-        var build = lookup.For(Channels.Stable);
+        // Отдельно — то, что видно и на сборке из исходников: как выглядит
+        // наш собственный файл на раздаче.
+        var lookup = await releases.GetAsync(SelfUpdateService.Id);
+        var build = lookup.Build;
 
         if (build is null)
         {
-            Fail("В своём репозитории не видно ни одного релиза.");
+            Fail($"На раздаче не видно сборки лаунчера (meta/{SelfUpdateService.Id}.json).");
             return;
         }
 
-        Line($"последний      {build.Tag}, {build.AssetName}, {build.Size / 1048576.0:0.0} МБ");
-        Check(SelfUpdateService.TryParseTag(build.Tag) is not null,
-            $"тег «{build.Tag}» разбирается в номер версии");
-        Check(build.HasStrongFingerprint,
+        Line($"последняя      {build.Version}, {build.FileName}, {build.Size / 1048576.0:0.0} МБ");
+        Check(build.FileName.EndsWith(".exe", StringComparison.OrdinalIgnoreCase),
+            "раздаётся один exe, а не архив");
+        Check(build.Sha256.Length == 64,
             "у файла есть sha256 — скачанное будет с чем сверить");
+        Check(build.Size > 20 * 1024 * 1024,
+            $"размер похож на self-contained сборку: {build.Size / 1048576.0:0.0} МБ");
 
         if (args.Contains("--selfupdate")) await ApplySelfUpdate(service, build);
     }
@@ -696,7 +681,7 @@ public static class SelfTest
     {
         Head("Подмена файла лаунчера");
         Line($"текущий exe    {Environment.ProcessPath}");
-        Line($"ставим         {build.Tag}");
+        Line($"ставим         {build.Version}");
 
         try
         {

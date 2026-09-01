@@ -14,37 +14,29 @@ public enum GameState
 /// должно быть видно сразу, без нажатий.</summary>
 public sealed record GameStatus(
     CatalogEntry Entry,
-    string Channel,
     InstalledGame? Installed,
     RemoteBuild? Remote,
     GameState State,
     string? Note)
 {
-    public static GameStatus Compute(
-        CatalogEntry entry, string channel, InstalledGame? installed, RemoteBuild? remote)
+    public static GameStatus Compute(CatalogEntry entry, InstalledGame? installed, RemoteBuild? remote)
     {
-        channel = Channels.Normalize(channel);
-
         if (installed is null)
-            return new GameStatus(entry, channel, null, remote, GameState.NotInstalled,
-                remote is null ? "Сборок в этом канале пока нет." : null);
+            return new GameStatus(entry, null, remote, GameState.NotInstalled,
+                remote is null ? "Сборок пока нет." : null);
 
         if (remote is null)
-            return new GameStatus(entry, channel, installed, null, GameState.InstalledUnknown,
+            return new GameStatus(entry, installed, null, GameState.InstalledUnknown,
                 "Не удалось проверить обновления.");
 
-        // Смена канала — тоже замена содержимого папки, а не «уже свежее».
-        if (!string.Equals(installed.Channel, channel, StringComparison.OrdinalIgnoreCase))
-            return new GameStatus(entry, channel, installed, remote, GameState.UpdateAvailable,
-                $"Установлен канал «{Channels.Display(installed.Channel)}», выбран «{Channels.Display(channel)}».");
-
-        // Сравнение по отпечатку архива, а не по тегу: тег dev не двигается
-        // никогда, и по нему обновление не увидеть.
+        // Сравнение по отпечатку архива, а не по строке версии: версию можно
+        // повторить, забыть обновить или собрать заново из того же коммита.
+        // Сумма меняется ровно тогда, когда меняется архив.
         var same = string.Equals(installed.Fingerprint, remote.Fingerprint, StringComparison.Ordinal);
 
         return same
-            ? new GameStatus(entry, channel, installed, remote, GameState.UpToDate, null)
-            : new GameStatus(entry, channel, installed, remote, GameState.UpdateAvailable, null);
+            ? new GameStatus(entry, installed, remote, GameState.UpToDate, null)
+            : new GameStatus(entry, installed, remote, GameState.UpdateAvailable, null);
     }
 
     /// <summary>Подпись главной кнопки.</summary>
@@ -82,20 +74,16 @@ public sealed record GameStatus(
         }
     }
 
-    /// <summary>Что доступно. build.json лежит внутри архива, до установки
-    /// его нет, поэтому берём ближайшее по смыслу: у стабильного релиза это
-    /// тег, а в dev тег не двигается никогда — там осмысленнее коммит из
-    /// описания релиза.</summary>
+    /// <summary>Что доступно. Раздача сообщает версию сразу, до скачивания, —
+    /// раньше её приходилось угадывать по тегу и тексту релиза.</summary>
     public string AvailableVersion
     {
         get
         {
             if (Remote is null) return "—";
+            if (Remote.Version is { Length: > 0 } version) return version;
 
-            if (!string.Equals(Remote.Tag, Channels.Dev, StringComparison.OrdinalIgnoreCase))
-                return Remote.Tag;
-
-            return Remote.CommitHint is { Length: > 0 } commit ? Short(commit) : Remote.Tag;
+            return Remote.Commit is { Length: > 0 } ? Remote.ShortCommit : "неизвестно";
         }
     }
 

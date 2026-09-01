@@ -96,7 +96,6 @@ public partial class App : Application
         var releases = new ReleaseService(library);
 
         var viewModel = new MainViewModel(
-            settings,
             library,
             new CatalogService(library),
             releases,

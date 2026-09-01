@@ -8,8 +8,4 @@ public sealed class LauncherSettings
 
     /// <summary>Папка с играми. null — первый запуск, путь ещё не выбран.</summary>
     public string? LibraryPath { get; set; }
-
-    /// <summary>Выбранный канал по каждой игре. Канал уже установленной
-    /// сборки хранится отдельно, в state.json.</summary>
-    public Dictionary<string, string> Channels { get; set; } = new(StringComparer.OrdinalIgnoreCase);
 }

@@ -119,7 +119,7 @@ public sealed class InstallService
         {
             if (!string.Equals(actualSha, remote.Sha256, StringComparison.OrdinalIgnoreCase))
                 throw new InstallException(
-                    "Контрольная сумма архива не совпала с заявленной GitHub. Установка отменена.");
+                    "Контрольная сумма архива не совпала с заявленной. Установка отменена.");
             return;
         }
 
@@ -244,14 +244,13 @@ public sealed class InstallService
         {
             Id = entry.Id,
 
-            // Канал берём свой, а не из build.json: там на стабильной сборке
-            // написан тег, и лаунчер решил бы, что канал сменился.
-            Channel = remote.Channel,
+            // Версию и коммит берём из build.json — он лежит внутри архива и
+            // писался той же сборкой. Метаданные раздачи только подстраховка:
+            // они говорят про файл, build.json — про то, что внутри.
+            Version = Pick(build.Version, remote.Version),
+            Commit = Pick(build.Commit, remote.Commit),
 
-            Version = string.IsNullOrWhiteSpace(build.Version) ? null : build.Version,
-            Commit = string.IsNullOrWhiteSpace(build.Commit) ? remote.CommitHint : build.Commit,
             Fingerprint = remote.Fingerprint,
-            Tag = remote.Tag,
             InstalledAt = DateTimeOffset.UtcNow,
             SizeOnDisk = MeasureDirectory(gameDir),
         };
@@ -259,6 +258,11 @@ public sealed class InstallService
         _library.SetInstalled(installed);
         return installed;
     }
+
+    /// <summary>Первое непустое из двух. Нужна ровно затем, чтобы пустая
+    /// строка не считалась ответом.</summary>
+    private static string? Pick(string? first, string? second) =>
+        first is { Length: > 0 } ? first : (second is { Length: > 0 } ? second : null);
 
     // ── удаление и запуск ────────────────────────────────────────────────
 

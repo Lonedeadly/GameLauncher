@@ -1,30 +1,34 @@
+using GameLauncher.Infrastructure;
+
 namespace GameLauncher.Model;
 
-/// <summary>Сборка, какой её видно по GitHub API — без скачивания архива.</summary>
+/// <summary>Сборка, какой её видно из meta/&lt;id&gt;.json — до скачивания.</summary>
 public sealed record RemoteBuild(
-    string Channel,
-    string Tag,
-    string AssetName,
-    string DownloadUrl,
+    // Строка для человека: «v0.1.0-49-gbc52f3b», из git describe.
+    string Version,
+    // Полный sha коммита, из которого собрано. Показывается редко, но
+    // отвечает на вопрос «а из чего вообще эта сборка».
+    string Commit,
+    // Путь относительно раздачи: files/<id>/<коммит>/<файл>. Относительный
+    // намеренно — переезд раздачи на другой адрес не потребует переписывать
+    // метаданные.
+    string RelativePath,
     long Size,
-    // SHA-256 архива из поля digest ассета, без префикса «sha256:».
-    // Отсутствует у релизов, залитых до появления этого поля.
-    string? Sha256,
-    DateTimeOffset UpdatedAt,
-    DateTimeOffset? PublishedAt,
-    // Короткий коммит, выуженный из текста релиза. Только чтобы показать
-    // что-то осмысленное до первой установки; логика на него не опирается.
-    string? CommitHint)
+    string Sha256,
+    DateTimeOffset? Published)
 {
+    public string DownloadUrl => Origin.Url(RelativePath);
+
+    public string FileName =>
+        RelativePath[(RelativePath.LastIndexOf('/') + 1)..];
+
     /// <summary>Отпечаток сборки: то, по чему решается «есть обновление».
     ///
-    /// Тег dev не двигается никогда, а build.json заперт внутри архива,
-    /// поэтому единственный доступный заранее признак — digest ассета.
-    /// Если его нет, откатываемся на размер и время заливки: хуже, но
-    /// всё же меняется вместе со сборкой.</summary>
-    public string Fingerprint => Sha256 is { Length: > 0 }
-        ? $"sha256:{Sha256}"
-        : $"size-time:{Size}:{UpdatedAt.ToUniversalTime():O}";
+    /// Сравниваем именно по нему, а не по версии: версия — строка для глаз,
+    /// её можно повторить, забыть обновить или собрать заново из того же
+    /// коммита. Сумма архива меняется ровно тогда, когда меняется архив.</summary>
+    public string Fingerprint => $"sha256:{Sha256}";
 
-    public bool HasStrongFingerprint => Sha256 is { Length: > 0 };
+    public string ShortCommit =>
+        Commit.Length >= 7 ? Commit[..7] : Commit;
 }
