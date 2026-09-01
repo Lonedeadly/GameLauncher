@@ -1,0 +1,51 @@
+# Список игр живёт в этом репозитории, а не голым файлом на сервере:
+# в git у него есть история и видно, кто что менял. На сервер он уезжает
+# сам, как только изменился, — чтобы добавление игры не требовало ни
+# одного захода на VPS.
+
+name: sync-catalog
+
+on:
+  push:
+    branches: [main]
+    paths: ['catalog.json']
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+jobs:
+  sync:
+    runs-on: ubuntu-latest
+
+    env:
+      HOST: game.lonedeadly.ru
+      REMOTE_USER: gamepub
+      HOSTKEY: ssh-ed25519 AAAAC3NzaC1lZDI1NTE5AAAAIBUBJOuyZwo+hmEcU42CB9Ee8+A04dB15teZ/fJDxsb6
+
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Положить каталог на сервер
+        env:
+          PUBLISH_KEY: ${{ secrets.PUBLISH_KEY }}
+        run: |
+          set -euo pipefail
+
+          # Битый каталог оставит лаунчер без списка игр, а починка потребует
+          # второго пуша. Дешевле проверить здесь.
+          jq -e '.games | length > 0' catalog.json > /dev/null
+
+          umask 077
+          printf '%s\n' "$PUBLISH_KEY" > publish_key
+          mkdir -p ~/.ssh
+          printf '%s %s\n' "$HOST" "$HOSTKEY" >> ~/.ssh/known_hosts
+
+          rsync -a -e "ssh -i publish_key -o IdentitiesOnly=yes -o BatchMode=yes" \
+            catalog.json "$REMOTE_USER@$HOST:catalog.json"
+
+          rm -f publish_key
+
+          # Сверяемся через тот же адрес, каким пользуется лаунчер.
+          diff <(curl -fsS "https://$HOST/catalog.json") catalog.json
+          echo "каталог на сервере совпадает с репозиторием"

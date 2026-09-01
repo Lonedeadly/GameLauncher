@@ -1,0 +1,123 @@
+# Кладёт собранную вещь на game.lonedeadly.ru — игру или сам лаунчер.
+#
+# Один файл на всех: правка здесь действует сразу везде, без обхода
+# репозиториев. Вызывающий передаёт только то, что у него своё —
+# идентификатор и артефакт со сборкой.
+#
+# Работает на Linux, хотя собирается всё на Windows. Причина простая:
+# rsync на windows-раннерах нет, а ключ на сервере ограничен именно
+# rsync и ничего другого не примет.
+
+name: publish
+
+on:
+  workflow_call:
+    inputs:
+      id:
+        description: Идентификатор — тот же, что в catalog.json («strelalka»); у лаунчера «launcher».
+        required: true
+        type: string
+      artifact:
+        description: Имя артефакта, внутри которого лежит ровно один файл сборки.
+        required: true
+        type: string
+      version:
+        description: Строка версии для показа человеку, обычно git describe.
+        required: true
+        type: string
+    secrets:
+      publish_key:
+        description: Приватный ключ пользователя gamepub. Умеет только класть файлы в /srv/game.
+        required: true
+
+jobs:
+  publish:
+    runs-on: ubuntu-latest
+
+    env:
+      HOST: game.lonedeadly.ru
+      REMOTE_USER: gamepub
+      # Отпечаток сервера прибит здесь намеренно. Принимать ключ вслепую
+      # на каждом прогоне — значит не проверять его вообще.
+      HOSTKEY: ssh-ed25519 AAAAC3NzaC1lZDI1NTE5AAAAIBUBJOuyZwo+hmEcU42CB9Ee8+A04dB15teZ/fJDxsb6
+
+    steps:
+      - name: Забрать сборку
+        uses: actions/download-artifact@v4
+        with:
+          name: ${{ inputs.artifact }}
+
+      - name: Положить на сервер
+        env:
+          PUBLISH_KEY: ${{ secrets.publish_key }}
+          ID: ${{ inputs.id }}
+          VERSION: ${{ inputs.version }}
+        run: |
+          set -euo pipefail
+
+          # В артефакте должен лежать ровно один файл. Если их вдруг стало
+          # больше, лучше остановиться, чем наугад выбрать не тот.
+          count=$(find . -maxdepth 1 -type f | wc -l)
+          if [ "$count" -ne 1 ]; then
+            echo "в артефакте $count файлов, ожидался один:"
+            find . -maxdepth 1 -type f
+            exit 1
+          fi
+          build=$(find . -maxdepth 1 -type f)
+          build=${build#./}
+
+          sha=$(sha256sum "$build" | cut -d' ' -f1)
+          size=$(stat -c %s "$build")
+          short=${GITHUB_SHA:0:7}
+
+          umask 077
+          printf '%s\n' "$PUBLISH_KEY" > publish_key
+          mkdir -p ~/.ssh
+          printf '%s %s\n' "$HOST" "$HOSTKEY" >> ~/.ssh/known_hosts
+          ssh_cmd="ssh -i publish_key -o IdentitiesOnly=yes -o BatchMode=yes"
+
+          # Коммит в пути: под одним и тем же именем каждый раз лежит
+          # другая сборка, и без него пришлось бы запрещать кэширование
+          # архивов. А так адрес меняется вместе с содержимым.
+          mkdir -p "up/$short"
+          cp "$build" "up/$short/"
+
+          # --delete оставляет на сервере только текущую сборку. Пуш в main
+          # идёт на каждый коммит, и без уборки диск заполнился бы за месяцы.
+          rsync -a --delete -e "$ssh_cmd" "up/" "$REMOTE_USER@$HOST:files/$ID/"
+
+          # Вторая копия по постоянному адресу — latest/<id>/<имя файла>.
+          # Она нужна человеку, а не лаунчеру: скачать лаунчер в первый раз
+          # неоткуда, самообновление тут не поможет — его ещё нет. Для игр
+          # это же адрес «взять руками», когда лаунчер сломан.
+          mkdir -p latest
+          cp "$build" latest/
+          rsync -a --delete -e "$ssh_cmd" latest/ "$REMOTE_USER@$HOST:latest/$ID/"
+
+          # Описание пишется ПОСЛЕ файла и только оно делает сборку видимой:
+          # лаунчер не обходит каталоги, он читает вот это. Обратный порядок
+          # открывал бы окно, в котором версия уже объявлена, а качать нечего.
+          jq -n \
+            --arg id "$ID" --arg version "$VERSION" --arg commit "$GITHUB_SHA" \
+            --arg file "files/$ID/$short/$build" --argjson size "$size" \
+            --arg sha256 "$sha" --arg published "$(date -u +%Y-%m-%dT%H:%M:%SZ)" \
+            '{schema: 1, id: $id, version: $version, commit: $commit,
+              file: $file, size: $size, sha256: $sha256, published: $published}' \
+            > meta.json
+
+          # rsync пишет во временный файл и переименовывает его на месте,
+          # так что наполовину обновлённых метаданных не бывает.
+          rsync -a -e "$ssh_cmd" meta.json "$REMOTE_USER@$HOST:meta/$ID.json"
+
+          rm -f publish_key
+
+          # Прочитать обратно через тот же адрес, каким пользуется лаунчер.
+          # Заливка, которая «прошла», но не видна снаружи, — худший исход:
+          # молчит и выглядит успехом.
+          got=$(curl -fsS "https://$HOST/meta/$ID.json" | jq -r .sha256)
+          if [ "$got" != "$sha" ]; then
+            echo "на сервере лежит другой sha256: $got, ожидался $sha"
+            exit 1
+          fi
+
+          echo "опубликовано: $ID $VERSION ($short), $size байт"

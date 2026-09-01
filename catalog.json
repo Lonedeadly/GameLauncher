@@ -1,22 +1,18 @@
 {
-  "schema": 1,
+  "schema": 2,
   "games": [
     {
       "id": "strelalka",
       "name": "Стрелялка",
-      "repo": "Lonedeadly/Strelalka-Releases",
       "exe": "Strelalka.exe",
       "description": "Заглушка описания. Настоящего пока нет.",
-      "defaultChannel": "dev",
       "image": null
     },
     {
       "id": "voxel",
       "name": "VoxelEngine",
-      "repo": "Lonedeadly/VoxelEngine-Releases",
       "exe": "VoxelGame.exe",
       "description": "Заглушка описания. Настоящего пока нет.",
-      "defaultChannel": "dev",
       "image": null
     }
   ]

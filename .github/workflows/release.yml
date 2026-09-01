@@ -1,39 +1,73 @@
+# Собирает лаунчер и кладёт его на game.lonedeadly.ru — туда же, где живут
+# игры. Раньше он публиковался релизом на GitHub и оттуда же обновлял себя;
+# теперь GitHub из кода лаунчера ушёл целиком, и держать ради одного запроса
+# в час целого клиента к чужому API было бы странно.
+#
+# Первую копию человек берёт по постоянной ссылке, её кладёт общий publish:
+# https://game.lonedeadly.ru/latest/launcher/GameLauncher.exe
+
 name: release
 
 on:
   push:
-    tags: ['v*']
+    branches: [main]
+  workflow_dispatch:
 
 permissions:
-  contents: write   # GITHUB_TOKEN встроенный, отдельных секретов не нужно
+  contents: read
+
+concurrency:
+  group: release-${{ github.ref }}
+  cancel-in-progress: true
 
 jobs:
-  release:
+  build:
     runs-on: windows-latest
+
+    outputs:
+      version: ${{ steps.build.outputs.version }}
+
     steps:
+      # Вся история: версия — это git describe, а по мелкому клону описывать
+      # нечего, тегов в нём нет.
       - uses: actions/checkout@v4
+        with:
+          fetch-depth: 0
 
       - uses: actions/setup-dotnet@v4
         with:
           dotnet-version: '10.0.x'
 
-      # Версия берётся из тега, а не хранится в репозитории: иначе она
-      # рано или поздно разойдётся с тем, что написано на релизе.
       - name: Publish
+        id: build
         shell: pwsh
         run: |
-          $version = $env:GITHUB_REF_NAME -replace '^v', ''
-          "Версия сборки: $version"
-          dotnet publish src/GameLauncher -c Release -o publish -p:Version=$version
+          $describe = (git describe --tags --always --dirty).Trim()
 
-      # Имя ассета стабильное, без версии: так самообновление лаунчера
-      # сможет искать его так же, как игры ищут свой zip.
-      - name: Create release
-        shell: pwsh
-        env:
-          GH_TOKEN: ${{ github.token }}
-        run: |
-          gh release create "$env:GITHUB_REF_NAME" `
-            publish/GameLauncher.exe `
-            --title "$env:GITHUB_REF_NAME" `
-            --generate-notes
+          # Version у сборки обязан быть числовым, а человеку показывается
+          # InformationalVersion — там git describe целиком, вместе с
+          # «сколько коммитов после тега».
+          $numeric = '0.0.0'
+          if ($describe -match '^v(\d+\.\d+\.\d+)') { $numeric = $Matches[1] }
+
+          "Версия сборки: $describe (сборочная $numeric)"
+          dotnet publish src/GameLauncher -c Release -o publish `
+            -p:Version=$numeric -p:InformationalVersion=$describe
+
+          "version=$describe" >> $env:GITHUB_OUTPUT
+
+      - name: Keep the exe
+        uses: actions/upload-artifact@v4
+        with:
+          name: GameLauncher.exe
+          path: publish/GameLauncher.exe
+
+  publish:
+    needs: build
+    uses: ./.github/workflows/publish.yml
+    with:
+      id: launcher
+      artifact: GameLauncher.exe
+      version: ${{ needs.build.outputs.version }}
+    secrets:
+      publish_key: ${{ secrets.PUBLISH_KEY }}
