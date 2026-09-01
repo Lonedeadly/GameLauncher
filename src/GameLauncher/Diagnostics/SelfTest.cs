@@ -64,7 +64,7 @@ public static class SelfTest
 
             TestBuildInfoForms();
             await TestGameWithoutBuilds(library, releases);
-            await TestCatalogOffline(library, workDir);
+            await TestCatalogOffline(library, workDir, catalog);
 
             await TestInstallCycle(library, releases, catalog, lookups);
 
@@ -157,16 +157,18 @@ public static class SelfTest
             return result.Catalog;
         }
 
-        // Репозиторий лаунчера ещё не опубликован, поэтому сетевой путь
-        // ожидаемо не сработал. Это и есть проверка деградации: упасть было
-        // нельзя, и не упали. Дальше берём каталог из рабочей копии.
+        // Раздача не ответила. Это тоже проверка: упасть было нельзя, и не
+        // упали. Дальше берём каталог из рабочей копии репозитория — если
+        // она рядом. У друга её нет, и тогда проверять нечего: об этом
+        // говорим прямо, а не притворяемся, что прогон удался.
         Check(result.Source is CatalogSource.None or CatalogSource.Cache,
             "недоступный каталог не уронил лаунчер");
 
         var localPath = FindRepoCatalog();
         if (localPath is null)
         {
-            Fail("Локальный catalog.json не найден.");
+            Fail("Раздача не ответила, а рабочей копии репозитория рядом нет — " +
+                 "проверять дальше нечего.");
             return new Catalog();
         }
 
@@ -294,17 +296,19 @@ public static class SelfTest
 
     /// <summary>Каталог недоступен — показываем последний известный список,
     /// а не пустое окно.</summary>
-    private static async Task TestCatalogOffline(LibraryService library, string workDir)
+    private static async Task TestCatalogOffline(
+        LibraryService library, string workDir, Catalog known)
     {
         Head("Каталог недоступен");
 
-        // Сохранённая копия появляется штатным путём: кладём её тем же
-        // сервисом, только источником служит локальный файл через file-URL
-        // мы пользоваться не можем, поэтому пишем кэш напрямую тем же JSON.
-        var localPath = FindRepoCatalog()!;
+        // Сохранённую копию пишем из того каталога, который уже подняли
+        // выше. Раньше сюда копировался catalog.json из рабочей копии
+        // репозитория — и это разваливалось ровно там, где проверка нужнее
+        // всего: у друга exe лежит сам по себе, никакого репозитория рядом
+        // нет, и самопроверка падала вместо того, чтобы что-то проверить.
         var cachePath = Path.Combine(library.CacheDir, "catalog.json");
         Directory.CreateDirectory(library.CacheDir);
-        File.Copy(localPath, cachePath, overwrite: true);
+        await File.WriteAllTextAsync(cachePath, JsonSerializer.Serialize(known, Json.Local));
 
         // Заведомо несуществующий хост — сеть при этом отключать не нужно.
         var offline = new CatalogService(library, "https://game.lonedeadly.invalid/catalog.json");
