@@ -32,6 +32,7 @@ public sealed class GameViewModel : ObservableObject
 
         PrimaryCommand = new AsyncRelayCommand(PrimaryAsync, () => !IsBusy && (CanPlay || CanInstallOrUpdate));
         UninstallCommand = new AsyncRelayCommand(UninstallAsync, () => !IsBusy && _status.CanUninstall);
+        CheckCommand = new AsyncRelayCommand(CheckAsync, () => !IsBusy);
     }
 
     public CatalogEntry Entry { get; }
@@ -44,6 +45,7 @@ public sealed class GameViewModel : ObservableObject
 
     public ICommand PrimaryCommand { get; }
     public ICommand UninstallCommand { get; }
+    public ICommand CheckCommand { get; }
 
     // ── состояние, видное без нажатий ────────────────────────────────────
 
@@ -66,6 +68,44 @@ public sealed class GameViewModel : ObservableObject
     public bool IsInstalled => _status.Installed is not null;
 
     public string? Warning { get; private set; }
+
+    // ── «проверить обновление» ───────────────────────────────────────────
+
+    private bool _isChecking;
+
+    /// <summary>Что показать рядом с кнопкой.
+    ///
+    /// Время берётся из самого ответа, а не запоминается при нажатии: на
+    /// повторное нажатие в те же полминуты ответит кэш, и написать «сейчас»
+    /// значило бы соврать — данные остались прежними. Пусть лучше время не
+    /// сдвинется: это и есть правда.</summary>
+    public string CheckStatus =>
+        _isChecking
+            ? "Проверяю…"
+            : _lookup is { Source: not ReleaseSource.None } lookup
+                ? $"Проверено в {lookup.FetchedAt.ToLocalTime():HH:mm}"
+                : "";
+
+    public bool HasCheckStatus => CheckStatus.Length > 0;
+
+    private async Task CheckAsync()
+    {
+        Error = null;
+        _isChecking = true;
+        RaiseAll(nameof(CheckStatus), nameof(HasCheckStatus));
+
+        try
+        {
+            // force: человек нажал сам. Отвечать ему кэшем — значит врать
+            // ровно там, где он спрашивает всерьёз.
+            await LoadReleasesAsync(force: true);
+        }
+        finally
+        {
+            _isChecking = false;
+            RaiseAll(nameof(CheckStatus), nameof(HasCheckStatus));
+        }
+    }
 
     // ── занятость и прогресс ─────────────────────────────────────────────
 
@@ -124,7 +164,8 @@ public sealed class GameViewModel : ObservableObject
         RaiseAll(
             nameof(StateCaption), nameof(InstalledVersion), nameof(AvailableVersion),
             nameof(PrimaryAction), nameof(Note), nameof(HasNote), nameof(CanPlay), nameof(CanInstallOrUpdate),
-            nameof(CanUninstall), nameof(ShowPrimary), nameof(HasUpdate), nameof(IsInstalled));
+            nameof(CanUninstall), nameof(ShowPrimary), nameof(HasUpdate), nameof(IsInstalled),
+            nameof(CheckStatus), nameof(HasCheckStatus));
     }
 
     // ── действия ─────────────────────────────────────────────────────────

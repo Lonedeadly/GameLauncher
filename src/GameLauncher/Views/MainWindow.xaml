@@ -195,6 +195,17 @@
                         <Button Content="Удалить" Margin="10,0,0,0"
                                 Command="{Binding UninstallCommand}"
                                 Visibility="{Binding CanUninstall, Converter={StaticResource BoolToVis}}" />
+
+                        <!-- Проверка есть и сама: по таймеру, при открытии
+                             карточки и после запуска игры. Кнопка нужна не
+                             вместо них, а чтобы не гадать, свежее ли то, что
+                             на экране, — и чтобы ответ был виден сразу. -->
+                        <Button Content="Проверить обновление" Margin="10,0,0,0"
+                                Command="{Binding CheckCommand}" />
+
+                        <TextBlock Text="{Binding CheckStatus}" Style="{StaticResource Dim}"
+                                   FontSize="11" VerticalAlignment="Center" Margin="12,0,0,0"
+                                   Visibility="{Binding HasCheckStatus, Converter={StaticResource BoolToVis}}" />
                     </StackPanel>
 
                     <!-- прогресс установки -->
