@@ -462,13 +462,17 @@ public static class SelfTest
             process = install.Launch(pick);
             Check(true, $"процесс стартовал, pid {process.Id}");
 
-            // Даём окну подняться и убеждаемся, что она не упала сразу же.
-            var died = process.WaitForExit(4000);
-            Check(!died, died
-                ? $"процесс завершился сам, код {process.ExitCode}"
-                : "через 4 секунды процесс жив — игра пошла");
-
-            Check(process.WorkingSetMemory() > 0, "процесс занял память");
+            // Признак «игра пошла» — появилось окно, а не «процесс жив через
+            // N секунд». Секундомер срывался: игра, которая открыла окно и
+            // сама же закрылась за три секунды, считалась провалом, хотя
+            // лаунчер своё дело сделал.
+            var window = WaitForWindow(process, TimeSpan.FromSeconds(8));
+            if (window)
+                Check(true, "окно игры появилось");
+            else if (process.HasExited)
+                Fail($"процесс завершился, не показав окна, код {process.ExitCode}");
+            else
+                Check(true, "окна не видно, но процесс жив через 8 секунд — считаем запущенной");
         }
         catch (InstallException ex)
         {
@@ -486,6 +490,29 @@ public static class SelfTest
             }
             process?.Dispose();
         }
+    }
+
+    /// <summary>Ждать главное окно процесса. Опрос, а не WaitForInputIdle:
+    /// тот возвращается по первому простою очереди сообщений, что бывает и
+    /// до окна, и не бывает вовсе у игры без обычного цикла сообщений.</summary>
+    private static bool WaitForWindow(System.Diagnostics.Process process, TimeSpan timeout)
+    {
+        var deadline = DateTime.UtcNow + timeout;
+        while (DateTime.UtcNow < deadline)
+        {
+            try
+            {
+                if (process.HasExited) return false;
+                process.Refresh();
+                if (process.MainWindowHandle != IntPtr.Zero) return true;
+            }
+            catch (InvalidOperationException)
+            {
+                return false;
+            }
+            Thread.Sleep(100);
+        }
+        return false;
     }
 
     /// <summary>Разбор build.json во всех формах, которые встречаются в

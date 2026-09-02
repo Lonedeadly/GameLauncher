@@ -1,8 +1,10 @@
+# Проверочная сборка для pull request. На push в main она не нужна:
+# release.yml собирает тот же exe тем же способом и ещё публикует его,
+# а собирать одно и то же дважды — пять минут раннера на каждый коммит.
+
 name: build
 
 on:
-  push:
-    branches: [main]
   pull_request:
   workflow_dispatch:
 

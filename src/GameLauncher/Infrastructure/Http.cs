@@ -18,7 +18,13 @@ public static class Http
         {
             AutomaticDecompression = DecompressionMethods.All,
             PooledConnectionLifetime = TimeSpan.FromMinutes(5),
-            ConnectTimeout = TimeSpan.FromSeconds(15),
+
+            // Пять секунд, а не пятнадцать по умолчанию, — из-за запасных
+            // портов. Отфильтрованный порт не отказывает, а молчит, и ждать
+            // его столько же, сколько отведено на весь запрос, значило бы не
+            // дойти до второго порта никогда. Три по пять укладываются в
+            // двадцать секунд общего предела с запасом.
+            ConnectTimeout = TimeSpan.FromSeconds(5),
         };
 
         // Бесконечный таймаут намеренно: HttpClient.Timeout режет операцию

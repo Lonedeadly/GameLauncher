@@ -84,15 +84,15 @@
                     <TextBlock Text="{Binding LauncherHeadline}" Foreground="#FFB9E7C2"
                                FontWeight="SemiBold" />
 
-                    <TextBlock Text="{Binding LauncherProgressText}" Foreground="#FF8FC79B"
+                    <TextBlock Text="{Binding LauncherProgress.Text}" Foreground="#FF8FC79B"
                                FontSize="11" Margin="0,4,0,0"
                                Visibility="{Binding LauncherBusy, Converter={StaticResource BoolToVis}}" />
 
                     <!-- Mode=OneWay обязателен: ProgressBar.Value связывается
                          TwoWay по умолчанию, а свойство только для чтения. -->
                     <ProgressBar Height="5" Maximum="100" Margin="0,6,0,0"
-                                 Value="{Binding LauncherProgressValue, Mode=OneWay}"
-                                 IsIndeterminate="{Binding LauncherProgressIndeterminate, Mode=OneWay}"
+                                 Value="{Binding LauncherProgress.Value, Mode=OneWay}"
+                                 IsIndeterminate="{Binding LauncherProgress.Indeterminate, Mode=OneWay}"
                                  Background="#FF17301D" Foreground="#FF4FA860" BorderThickness="0"
                                  Visibility="{Binding LauncherBusy, Converter={StaticResource BoolToVis}}" />
 
@@ -100,10 +100,15 @@
                                Visibility="{Binding HasLauncherError, Converter={StaticResource BoolToVis}}" />
                 </StackPanel>
 
-                <Button Grid.Column="1" Content="Обновить и перезапустить" Margin="14,0,0,0"
-                        Style="{StaticResource Accent}"
-                        Command="{Binding UpdateLauncherCommand}"
-                        Visibility="{Binding HasLauncherUpdate, Converter={StaticResource BoolToVis}}" />
+                <StackPanel Grid.Column="1" Orientation="Horizontal" Margin="14,0,0,0" VerticalAlignment="Center">
+                    <Button Content="Обновить и перезапустить"
+                            Style="{StaticResource Accent}"
+                            Command="{Binding UpdateLauncherCommand}"
+                            Visibility="{Binding HasLauncherUpdate, Converter={StaticResource BoolToVis}}" />
+                    <Button Content="Отмена" Padding="12,5"
+                            Command="{Binding CancelLauncherCommand}"
+                            Visibility="{Binding LauncherBusy, Converter={StaticResource BoolToVis}}" />
+                </StackPanel>
             </Grid>
         </Border>
 
@@ -211,13 +216,19 @@
                     <!-- прогресс установки -->
                     <StackPanel Margin="0,22,0,0"
                                 Visibility="{Binding IsBusy, Converter={StaticResource BoolToVis}}">
-                        <TextBlock Text="{Binding ProgressText}" Style="{StaticResource Dim}" Margin="0,0,0,6" />
+                        <TextBlock Text="{Binding Progress.Text}" Style="{StaticResource Dim}" Margin="0,0,0,6" />
                         <!-- Mode=OneWay обязателен: ProgressBar.Value связывается
                              TwoWay по умолчанию, а свойство только для чтения. -->
                         <ProgressBar Height="6" Maximum="100"
-                                     Value="{Binding ProgressValue, Mode=OneWay}"
-                                     IsIndeterminate="{Binding ProgressIndeterminate, Mode=OneWay}"
+                                     Value="{Binding Progress.Value, Mode=OneWay}"
+                                     IsIndeterminate="{Binding Progress.Indeterminate, Mode=OneWay}"
                                      Background="#FF2A2C31" Foreground="#FF2F6FEB" BorderThickness="0" />
+
+                        <!-- Отмена убирает временное и не трогает то, что
+                             стояло: обрыв на середине — штатный случай. -->
+                        <Button Content="Отмена" Padding="12,5" Margin="0,12,0,0"
+                                HorizontalAlignment="Left"
+                                Command="{Binding CancelCommand}" />
                     </StackPanel>
 
                 </StackPanel>

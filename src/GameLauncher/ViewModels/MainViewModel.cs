@@ -48,6 +48,8 @@ public sealed class MainViewModel : ObservableObject
         RefreshCommand = new AsyncRelayCommand(() => LoadAsync(force: true), () => !IsLoading);
         UpdateLauncherCommand = new AsyncRelayCommand(
             UpdateLauncherAsync, () => !LauncherBusy && _launcher.Build is not null);
+        CancelLauncherCommand = new RelayCommand(
+            () => _launcherCancel?.Cancel(), () => LauncherBusy && _launcherCancel is { IsCancellationRequested: false });
         Games.CollectionChanged += (_, _) => Raise(nameof(IsEmpty));
 
         _timer = new DispatcherTimer { Interval = AutoInterval };
@@ -118,7 +120,11 @@ public sealed class MainViewModel : ObservableObject
     private string _checked = "";
     /// <summary>«проверено в 14:32». Занимает строку внизу не ради красоты:
     /// без неё нельзя отличить «обновлений нет» от «спросить не вышло, и я
-    /// показываю позавчерашнее».</summary>
+    /// показываю позавчерашнее».
+    ///
+    /// Время — самого свежего ответа среди игр, а не момент нажатия: если
+    /// ответил кэш, данные старые, и писать «сейчас» значило бы врать. То же
+    /// правило, что и у подписи в карточке.</summary>
     public string Checked { get => _checked; private set => Set(ref _checked, value); }
 
     /// <param name="quiet">Проверка по таймеру: без полосы загрузки. Она
@@ -190,6 +196,11 @@ public sealed class MainViewModel : ObservableObject
         new(SelfUpdateState.Unknown, AppVersion.Display, null, null, null);
 
     public ICommand UpdateLauncherCommand { get; }
+    public ICommand CancelLauncherCommand { get; }
+
+    public ProgressState LauncherProgress { get; } = new();
+
+    private CancellationTokenSource? _launcherCancel;
 
     /// <summary>Есть что ставить. Во время установки кнопка убирается —
     /// нажать второй раз на «обновить и перезапустить» нечему.</summary>
@@ -212,27 +223,6 @@ public sealed class MainViewModel : ObservableObject
             if (Set(ref _launcherBusy, value))
                 RaiseAll(nameof(HasLauncherUpdate), nameof(ShowLauncherBar));
         }
-    }
-
-    private double _launcherProgressValue;
-    public double LauncherProgressValue
-    {
-        get => _launcherProgressValue;
-        private set => Set(ref _launcherProgressValue, value);
-    }
-
-    private bool _launcherProgressIndeterminate;
-    public bool LauncherProgressIndeterminate
-    {
-        get => _launcherProgressIndeterminate;
-        private set => Set(ref _launcherProgressIndeterminate, value);
-    }
-
-    private string _launcherProgressText = "";
-    public string LauncherProgressText
-    {
-        get => _launcherProgressText;
-        private set => Set(ref _launcherProgressText, value);
     }
 
     private string? _launcherError;
@@ -273,30 +263,15 @@ public sealed class MainViewModel : ObservableObject
 
         LauncherError = null;
         LauncherBusy = true;
-        LauncherProgressIndeterminate = true;
-        LauncherProgressValue = 0;
-        LauncherProgressText = "Подготовка…";
+        LauncherProgress.Begin();
+        _launcherCancel = new CancellationTokenSource();
 
-        var progress = new Progress<InstallProgress>(p =>
-        {
-            LauncherProgressText = p.Phase == InstallPhase.Swapping
-                ? "Замена файла и перезапуск…"
-                : p.Describe();
-
-            if (p.Fraction is { } fraction)
-            {
-                LauncherProgressIndeterminate = false;
-                LauncherProgressValue = fraction * 100;
-            }
-            else
-            {
-                LauncherProgressIndeterminate = true;
-            }
-        });
+        var progress = new Progress<InstallProgress>(p => LauncherProgress.Report(
+            p, p.Phase == InstallPhase.Swapping ? "Замена файла и перезапуск…" : null));
 
         try
         {
-            await _selfUpdate.ApplyAsync(build, progress);
+            await _selfUpdate.ApplyAsync(build, progress, _launcherCancel.Token);
 
             // Дальше работает уже новый процесс, и он ждёт нашего выхода,
             // чтобы переписать файл. Задерживаться здесь нельзя.
@@ -306,17 +281,31 @@ public sealed class MainViewModel : ObservableObject
         {
             LauncherError = ex.Message;
         }
+        catch (OperationCanceledException)
+        {
+            // Отменил человек. Полоса просто исчезает: об отмене по своей
+            // же просьбе сообщать не о чем, а кнопка вернётся на место сама.
+        }
         catch (Exception ex)
         {
             LauncherError = $"Обновить лаунчер не удалось: {ex.Message}";
         }
         finally
         {
+            _launcherCancel.Dispose();
+            _launcherCancel = null;
             LauncherBusy = false;
-            LauncherProgressText = "";
+            LauncherProgress.Clear();
         }
     }
 
-    private void UpdateChecked() =>
-        Checked = $"проверено в {DateTime.Now:HH:mm}";
+    private void UpdateChecked()
+    {
+        var latest = Games
+            .Select(g => g.CheckedAt)
+            .Where(t => t is not null)
+            .Max();
+
+        Checked = latest is { } at ? $"проверено в {at.ToLocalTime():HH:mm}" : "";
+    }
 }

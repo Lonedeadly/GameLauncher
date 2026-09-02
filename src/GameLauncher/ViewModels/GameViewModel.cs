@@ -33,6 +33,7 @@ public sealed class GameViewModel : ObservableObject
         PrimaryCommand = new AsyncRelayCommand(PrimaryAsync, () => !IsBusy && (CanPlay || CanInstallOrUpdate));
         UninstallCommand = new AsyncRelayCommand(UninstallAsync, () => !IsBusy && _status.CanUninstall);
         CheckCommand = new AsyncRelayCommand(CheckAsync, () => !IsBusy);
+        CancelCommand = new RelayCommand(() => _cancel?.Cancel(), () => IsBusy && _cancel is { IsCancellationRequested: false });
     }
 
     public CatalogEntry Entry { get; }
@@ -46,6 +47,7 @@ public sealed class GameViewModel : ObservableObject
     public ICommand PrimaryCommand { get; }
     public ICommand UninstallCommand { get; }
     public ICommand CheckCommand { get; }
+    public ICommand CancelCommand { get; }
 
     // ── состояние, видное без нажатий ────────────────────────────────────
 
@@ -88,6 +90,10 @@ public sealed class GameViewModel : ObservableObject
 
     public bool HasCheckStatus => CheckStatus.Length > 0;
 
+    /// <summary>Когда данные о сборке были получены на самом деле.</summary>
+    public DateTimeOffset? CheckedAt =>
+        _lookup is { Source: not ReleaseSource.None } lookup ? lookup.FetchedAt : null;
+
     private async Task CheckAsync()
     {
         Error = null;
@@ -118,14 +124,12 @@ public sealed class GameViewModel : ObservableObject
 
     public bool IsIdle => !_isBusy;
 
-    private double _progressValue;
-    public double ProgressValue { get => _progressValue; private set => Set(ref _progressValue, value); }
+    public ProgressState Progress { get; } = new();
 
-    private bool _progressIndeterminate;
-    public bool ProgressIndeterminate { get => _progressIndeterminate; private set => Set(ref _progressIndeterminate, value); }
-
-    private string _progressText = "";
-    public string ProgressText { get => _progressText; private set => Set(ref _progressText, value); }
+    /// <summary>Живёт ровно одну установку. Отмена — это его Cancel, и
+    /// дальше всё делает сама установка: временное убирает, старую игру
+    /// не трогает.</summary>
+    private CancellationTokenSource? _cancel;
 
     private string? _error;
     public string? Error
@@ -210,27 +214,14 @@ public sealed class GameViewModel : ObservableObject
         if (remote is null) return;
 
         IsBusy = true;
-        ProgressValue = 0;
-        ProgressIndeterminate = true;
-        ProgressText = "Подготовка…";
+        Progress.Begin();
+        _cancel = new CancellationTokenSource();
 
-        var progress = new Progress<InstallProgress>(p =>
-        {
-            ProgressText = p.Describe();
-            if (p.Fraction is { } f)
-            {
-                ProgressIndeterminate = false;
-                ProgressValue = f * 100;
-            }
-            else
-            {
-                ProgressIndeterminate = true;
-            }
-        });
+        var progress = new Progress<InstallProgress>(p => Progress.Report(p));
 
         try
         {
-            await _install.InstallAsync(Entry, remote, progress);
+            await _install.InstallAsync(Entry, remote, progress, _cancel.Token);
         }
         catch (InstallException ex)
         {
@@ -246,8 +237,10 @@ public sealed class GameViewModel : ObservableObject
         }
         finally
         {
+            _cancel.Dispose();
+            _cancel = null;
             IsBusy = false;
-            ProgressText = "";
+            Progress.Clear();
             RefreshStatus();
         }
     }

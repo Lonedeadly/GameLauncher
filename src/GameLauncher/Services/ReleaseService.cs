@@ -1,3 +1,4 @@
+using System.Collections.Concurrent;
 using System.Net;
 using System.Net.Http;
 using System.Text.Json;
@@ -34,7 +35,11 @@ public sealed class ReleaseService
     public static readonly TimeSpan MinInterval = TimeSpan.FromSeconds(30);
 
     private readonly LibraryService _library;
-    private readonly Dictionary<string, Cached> _memory = new(StringComparer.OrdinalIgnoreCase);
+
+    // Игры опрашиваются параллельно, и все — через один экземпляр. Обычный
+    // словарь держался только на том, что продолжения возвращались в один
+    // поток; зависеть от того, кто нас вызвал, сервису не пристало.
+    private readonly ConcurrentDictionary<string, Cached> _memory = new(StringComparer.OrdinalIgnoreCase);
 
     public ReleaseService(LibraryService library) => _library = library;
 
