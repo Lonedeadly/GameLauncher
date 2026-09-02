@@ -4,7 +4,25 @@
         Title="GameLauncher" Height="600" Width="960" MinHeight="460" MinWidth="760"
         WindowStartupLocation="CenterScreen"
         Background="#FF1E1F22" Foreground="#FFE8E8EA"
-        FontFamily="Segoe UI" FontSize="13">
+        FontFamily="Segoe UI" FontSize="13"
+        StateChanged="Window_StateChanged">
+
+    <!-- Шапку рисуем сами, но окно остаётся обычным окном: перетаскивание,
+         прилипание к краям, разворот двойным щелчком и рамки изменения
+         размера достаются даром. Путь через WindowStyle=None плюс
+         AllowsTransparency отнял бы всё это разом, да ещё и аппаратное
+         ускорение вместе с ними.
+
+         CaptionHeight совпадает с высотой шапки: ровно эта полоса и ведёт
+         себя как заголовок. Кнопки внутри неё помечены отдельно, иначе
+         щелчок по ним считался бы щелчком по заголовку. -->
+    <WindowChrome.WindowChrome>
+        <WindowChrome CaptionHeight="40"
+                      ResizeBorderThickness="6"
+                      CornerRadius="0"
+                      GlassFrameThickness="0"
+                      UseAeroCaptionButtons="False" />
+    </WindowChrome.WindowChrome>
 
     <Window.Resources>
         <BooleanToVisibilityConverter x:Key="BoolToVis" />
@@ -34,6 +52,70 @@
             <Setter Property="FontWeight" Value="SemiBold" />
         </Style>
 
+        <!-- Кнопки шапки. Свой шаблон, а не общий стиль кнопок: здесь не
+             нужны ни рамка, ни отступы, ни рука вместо стрелки — Windows
+             в заголовке показывает обычный курсор.
+
+             IsHitTestVisibleInChrome обязателен: без него кнопка лежит
+             внутри области заголовка и не получает щелчков вовсе. -->
+        <Style x:Key="CaptionButton" TargetType="Button">
+            <Setter Property="Width" Value="46" />
+            <Setter Property="Height" Value="40" />
+            <Setter Property="Background" Value="Transparent" />
+            <Setter Property="Foreground" Value="#FFB9BBC2" />
+            <Setter Property="FontSize" Value="10" />
+            <Setter Property="WindowChrome.IsHitTestVisibleInChrome" Value="True" />
+
+            <!-- Fluent — на Windows 11, MDL2 — запасной для Windows 10.
+                 Значки лежат в частной области кодов, и без этих шрифтов
+                 на их месте были бы квадраты. -->
+            <Setter Property="FontFamily" Value="Segoe Fluent Icons, Segoe MDL2 Assets" />
+
+            <Setter Property="Template">
+                <Setter.Value>
+                    <ControlTemplate TargetType="Button">
+                        <Border x:Name="Fill" Background="{TemplateBinding Background}">
+                            <ContentPresenter HorizontalAlignment="Center" VerticalAlignment="Center" />
+                        </Border>
+                        <ControlTemplate.Triggers>
+                            <Trigger Property="IsMouseOver" Value="True">
+                                <Setter TargetName="Fill" Property="Background" Value="#FF2E3036" />
+                            </Trigger>
+                            <Trigger Property="IsPressed" Value="True">
+                                <Setter TargetName="Fill" Property="Background" Value="#FF3A3D42" />
+                            </Trigger>
+                        </ControlTemplate.Triggers>
+                    </ControlTemplate>
+                </Setter.Value>
+            </Setter>
+        </Style>
+
+        <!-- Закрытие краснеет, как принято в Windows: это единственная
+             кнопка шапки, которую нажимают не глядя, и её место должно
+             узнаваться цветом. -->
+        <Style x:Key="CloseButton" TargetType="Button" BasedOn="{StaticResource CaptionButton}">
+            <Setter Property="Template">
+                <Setter.Value>
+                    <ControlTemplate TargetType="Button">
+                        <Border x:Name="Fill" Background="{TemplateBinding Background}">
+                            <ContentPresenter x:Name="Glyph"
+                                              HorizontalAlignment="Center" VerticalAlignment="Center" />
+                        </Border>
+                        <ControlTemplate.Triggers>
+                            <Trigger Property="IsMouseOver" Value="True">
+                                <Setter TargetName="Fill" Property="Background" Value="#FFC42B1C" />
+                                <Setter Property="Foreground" Value="White" />
+                            </Trigger>
+                            <Trigger Property="IsPressed" Value="True">
+                                <Setter TargetName="Fill" Property="Background" Value="#FF8E1F14" />
+                                <Setter Property="Foreground" Value="White" />
+                            </Trigger>
+                        </ControlTemplate.Triggers>
+                    </ControlTemplate>
+                </Setter.Value>
+            </Setter>
+        </Style>
+
         <!-- Строка списка: название, состояние, точка при наличии обновления. -->
         <DataTemplate x:Key="GameRow">
             <Grid Margin="4,7">
@@ -61,17 +143,56 @@
         </DataTemplate>
     </Window.Resources>
 
-    <Grid>
+    <!-- Имя нужно коду: у развёрнутого окна этой сетке достаётся отступ,
+         которым компенсируется невидимая рамка. -->
+    <Grid x:Name="Root">
         <Grid.RowDefinitions>
+            <RowDefinition Height="Auto" />
             <RowDefinition Height="Auto" />
             <RowDefinition Height="Auto" />
             <RowDefinition Height="*" />
             <RowDefinition Height="Auto" />
         </Grid.RowDefinitions>
 
+        <!-- шапка -->
+        <Border Grid.Row="0" Height="40" Background="#FF17181B"
+                BorderBrush="#FF2A2C31" BorderThickness="0,0,0,1">
+            <Grid>
+                <Grid.ColumnDefinitions>
+                    <ColumnDefinition Width="Auto" />
+                    <ColumnDefinition Width="*" />
+                    <ColumnDefinition Width="Auto" />
+                </Grid.ColumnDefinitions>
+
+                <StackPanel Orientation="Horizontal" VerticalAlignment="Center" Margin="12,0,0,0">
+                    <Border Width="20" Height="20" CornerRadius="5" Background="#FF2F6FEB">
+                        <TextBlock Text="G" FontSize="12" FontWeight="Bold" Foreground="White"
+                                   HorizontalAlignment="Center" VerticalAlignment="Center" />
+                    </Border>
+
+                    <TextBlock Text="GameLauncher" FontWeight="SemiBold" Margin="9,0,0,0"
+                               VerticalAlignment="Center" />
+
+                    <!-- Версия здесь, а не в подвале: раньше она стояла в двух
+                         местах сразу — в системном заголовке и внизу окна. -->
+                    <TextBlock Text="{Binding LauncherVersion}" Style="{StaticResource Dim}"
+                               FontSize="11" Margin="10,1,0,0" VerticalAlignment="Center" />
+                </StackPanel>
+
+                <StackPanel Grid.Column="2" Orientation="Horizontal">
+                    <Button Style="{StaticResource CaptionButton}" Content="&#xE921;"
+                            Click="Minimize_Click" ToolTip="Свернуть" />
+                    <Button x:Name="MaxButton" Style="{StaticResource CaptionButton}" Content="&#xE922;"
+                            Click="Maximize_Click" ToolTip="Развернуть" />
+                    <Button Style="{StaticResource CloseButton}" Content="&#xE8BB;"
+                            Click="Close_Click" ToolTip="Закрыть" />
+                </StackPanel>
+            </Grid>
+        </Border>
+
         <!-- Обновление самого лаунчера. Самой верхней строкой и заметным
              цветом: это единственное, что друг не может узнать иначе. -->
-        <Border Grid.Row="0" Background="#FF1E3A24" BorderBrush="#FF2F6B3C"
+        <Border Grid.Row="1" Background="#FF1E3A24" BorderBrush="#FF2F6B3C"
                 BorderThickness="0,0,0,1" Padding="14,10"
                 Visibility="{Binding ShowLauncherBar, Converter={StaticResource BoolToVis}}">
             <Grid>
@@ -113,12 +234,12 @@
         </Border>
 
         <!-- Полоска сообщений: каталог из копии, лимит исчерпан и т.п. -->
-        <Border Grid.Row="1" Background="#FF3A2F1E" Padding="14,9"
+        <Border Grid.Row="2" Background="#FF3A2F1E" Padding="14,9"
                 Visibility="{Binding HasNotice, Converter={StaticResource BoolToVis}}">
             <TextBlock Text="{Binding Notice}" Foreground="#FFE7C88A" />
         </Border>
 
-        <Grid Grid.Row="2">
+        <Grid Grid.Row="3">
             <Grid.ColumnDefinitions>
                 <ColumnDefinition Width="260" />
                 <ColumnDefinition Width="*" />
@@ -236,11 +357,10 @@
         </Grid>
 
         <!-- подвал -->
-        <Border Grid.Row="3" Background="#FF17181B" BorderBrush="#FF2A2C31" BorderThickness="0,1,0,0" Padding="14,8">
+        <Border Grid.Row="4" Background="#FF17181B" BorderBrush="#FF2A2C31" BorderThickness="0,1,0,0" Padding="14,8">
             <Grid>
                 <Grid.ColumnDefinitions>
                     <ColumnDefinition Width="*" />
-                    <ColumnDefinition Width="Auto" />
                     <ColumnDefinition Width="Auto" />
                     <ColumnDefinition Width="Auto" />
                 </Grid.ColumnDefinitions>
@@ -249,13 +369,10 @@
                            VerticalAlignment="Center" TextTrimming="CharacterEllipsis"
                            ToolTip="Папка с играми" />
 
-                <TextBlock Grid.Column="1" Text="{Binding LauncherVersion}" Style="{StaticResource Dim}"
-                           FontSize="11" VerticalAlignment="Center" Margin="12,0,0,0" />
-
-                <TextBlock Grid.Column="2" Text="{Binding Checked}" Style="{StaticResource Dim}"
+                <TextBlock Grid.Column="1" Text="{Binding Checked}" Style="{StaticResource Dim}"
                            FontSize="11" VerticalAlignment="Center" Margin="12,0" />
 
-                <Button Grid.Column="3" Content="Обновить" Padding="12,5"
+                <Button Grid.Column="2" Content="Обновить" Padding="12,5"
                         Command="{Binding RefreshCommand}" />
             </Grid>
         </Border>

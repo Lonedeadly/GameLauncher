@@ -238,10 +238,12 @@ public sealed class MainViewModel : ObservableObject
 
     public bool HasLauncherError => !string.IsNullOrEmpty(_launcherError);
 
-    /// <summary>Своя версия — то, что первым спросят при разборе жалобы.</summary>
+    /// <summary>Своя версия — то, что первым спросят при разборе жалобы.
+    /// Без приставки «версия»: в шапке она стоит вплотную к названию, и
+    /// слово между ними только мешало бы.</summary>
     public string LauncherVersion => AppVersion.IsDevBuild
         ? "сборка из исходников"
-        : $"версия {AppVersion.Display}";
+        : AppVersion.Display;
 
     private async Task CheckLauncherAsync(bool force)
     {

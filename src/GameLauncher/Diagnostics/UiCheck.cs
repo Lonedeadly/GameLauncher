@@ -64,6 +64,7 @@ public static class UiCheck
                 $"{e.PropertyName}@{(System.Windows.Threading.Dispatcher.CurrentDispatcher == window.Dispatcher ? "ui" : "bg")}");
 
         var timer = new DispatcherTimer { Interval = after };
+        var report0 = new List<string>();
         timer.Tick += (_, _) =>
         {
             timer.Stop();
@@ -83,6 +84,8 @@ public static class UiCheck
                     }
                 }
 
+                ShotMaximized(window, workDir, report0);
+
                 ShotFirstRun(workDir);
             }
             catch (Exception ex) when (ex is IOException or InvalidOperationException)
@@ -92,7 +95,8 @@ public static class UiCheck
 
             var report = new StringBuilder();
             report.AppendLine($"окно            {window.Title}, {window.ActualWidth:0}x{window.ActualHeight:0}");
-            report.AppendLine($"проблем привязок: {Sink.Messages.Count}");
+            report.AppendLine($"замечаний: {Sink.Messages.Count}");
+            foreach (var line in report0) report.AppendLine(line);
 
             if (window.FindName("CardPane") is FrameworkElement pane)
                 report.AppendLine(
@@ -134,6 +138,53 @@ public static class UiCheck
             Environment.Exit(Sink.Messages.Count == 0 ? 0 : 1);
         };
         timer.Start();
+    }
+
+    /// <summary>Развёрнутое окно — отдельный случай, и проверяется он
+    /// числом, а не на глаз.
+    ///
+    /// Развернув окно, Windows делает его больше экрана ровно на невидимую
+    /// рамку изменения размера. У окна с системным заголовком это незаметно,
+    /// а у окна со своей шапкой за край уехали бы кнопки — вместе с
+    /// «Закрыть». Признак того, что поправка верна: содержимое ровно
+    /// совпадает с рабочей областью экрана.</summary>
+    private static void ShotMaximized(Window window, string workDir, List<string> report)
+    {
+        var was = window.WindowState;
+        try
+        {
+            window.WindowState = WindowState.Maximized;
+            window.UpdateLayout();
+
+            Snapshot(window, Path.Combine(workDir, "main-window-max.png"));
+
+            var work = SystemParameters.WorkArea;
+            if (window.FindName("Root") is FrameworkElement root)
+            {
+                report.Add($"развёрнуто      окно {window.ActualWidth:0}x{window.ActualHeight:0}, " +
+                           $"содержимое {root.ActualWidth:0}x{root.ActualHeight:0}, " +
+                           $"экран {work.Width:0}x{work.Height:0}");
+
+                // Допуск в пиксель: рамка бывает дробной при масштабировании.
+                var fits = Math.Abs(root.ActualWidth - work.Width) <= 1.5
+                           && Math.Abs(root.ActualHeight - work.Height) <= 1.5;
+
+                if (!fits)
+                    Sink.Messages.Add(
+                        $"развёрнутое окно не совпало с экраном: содержимое " +
+                        $"{root.ActualWidth:0}x{root.ActualHeight:0} против {work.Width:0}x{work.Height:0}. " +
+                        "Шапка уедет за край.");
+            }
+            else
+            {
+                Sink.Messages.Add("в окне нет элемента Root — поправку для развёрнутого окна не проверить.");
+            }
+        }
+        finally
+        {
+            window.WindowState = was;
+            window.UpdateLayout();
+        }
     }
 
     /// <summary>Окно первого запуска показываем отдельно и невидимо для
